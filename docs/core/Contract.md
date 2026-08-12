@@ -109,69 +109,23 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 ## 6. 资源生命周期规约
 
-### 6.1 Frame
+详细规约见 [Contract/Resources.md](./Contract/Resources.md)。
 
-Camera Actor 从 SDK 获得图像后：
+该子文档定义：
 
-1. 将图像数据复制到应用拥有的内存；
-2. 生成 `frame_id` 并构造不可变 Frame；
-3. 通过共享引用发布到 Latest Frame Store；
-4. 新引用替换 Store 中的旧引用。
+- Frame、Camera SDK 缓冲区和 Latest Frame Store 的生命周期；
+- GUI 预览 Frame、模式状态及配置临时资源的持有和释放；
+- Inspection Plan、检查申请和完整任务上下文的所有权；
+- Worker 输出、领域事件和 InspectionPresentation 的载荷转移；
+- 状态投影、AppViewSnapshot 和优雅关机的资源释放顺序。
 
-约束：
+关键约束：
 
-- 发布后的图像内存不得修改或复用；
-- Latest Frame Store 只保存一个最新帧引用；
-- 每次读取返回读取时最新 Frame 的独立共享引用；
-- 尚未发布帧时，读取结果表示无帧；
-- 替换最新帧不修改旧帧，也不等待消费者；
-- Frame 在全部共享引用释放后销毁。
-
-### 6.2 检查帧
-
-App Controller 完成检查方案准备、准备提交检查申请时，从 Latest Frame Store 读取最新 Frame，并将其固定为本次检查输入。
-
-- 没有可用帧时返回 `NoFrame`，不提交检查申请；
-- Inspection Actor 不再次读取 Latest Frame Store；
-- 后续发布的新帧不影响该检查；
-- 申请失败时，申请对象销毁，其持有的 Frame 共享引用随之释放；
-- 申请成功后，Inspection Actor 持有 Frame，直至任务终止；
-- 检查完成或失败事件持有供展示使用的独立共享引用。
-
-### 6.3 Draft Config
-
-- Draft Config 由 EditMode 持有；
-- 修改草稿只改变内存状态；
-- 草稿变化不创建或修改生产方案；
-- 返回 Home 时释放草稿；
-- 保存成功后，内存草稿同步为已提交的新 `revision`；除 `revision` 外，其逻辑内容与磁盘配置一致。
-
-### 6.4 Inspection Plan
-
-方案的构建边界和所有权详见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)。
-
-- Scheme Manager 将有效配置构建为不可变可执行 Inspection Plan；
-- Inspection Actor 和 Inspection Worker 均不构建或组装方案；
-- 裸闭包不作为跨组件契约；
-- 申请成功后，Inspection Actor 持有任务方案，直至任务终止；
-- 申请被拒绝时，申请对象销毁，其持有的方案共享引用随之释放。
-
-### 6.5 InspectionPresentation
-
-GUI 只保留当前模式最近一次 InspectionPresentation。展示对象至少包含关联帧以及以下内容之一：
-
-- 成功的 InspectionResult；
-- 失败的 InspectionError 及对应元数据。
-
-展示规则：
-
-- 成功且存在可视化数据时，在关联帧上显示标记；
-- 成功但没有可视化数据时，显示关联帧和文字结果；
-- 失败时显示关联帧和错误；
-- 新展示替换旧展示时释放旧帧引用；
-- 离开当前模式时释放展示对象。
-
-GUI 不持有或长期借用 AppState。App Controller 将领域状态纯投影为不可变 `AppViewSnapshot`，以替换式最新值语义发布；GUI 订阅快照并替换本地持有值，可以跳过中间版本。一次性命令结果使用事件传递，高频预览帧仍由 GUI 按刷新节奏从 Latest Frame Store 读取。Home 的文件选择对话框状态和候选路径属于 GUI 本地状态。详细规则见 [状态机规约](./Contract/StateMachines.md#33-gui-可观察状态投影)。
+- 释放共享引用只结束当前持有者的所有权，底层对象在最后一个共享引用释放后销毁；
+- 状态外准备只有在操作成功提交后才能成为领域状态资源，失败、拒绝或过滤必须释放未提交资源；
+- App Controller 当前模式的 `optional_presentation` 是最近一次 InspectionPresentation 的唯一领域真值，GUI 只持有其最新状态快照；
+- 每个被接受的检查在 Worker 终止前固定 Frame 和 Inspection Plan，并持有完整任务上下文；
+- 优雅关机必须按 Camera、当前检查、Worker 与 Actor、应用状态和 Store 的依赖顺序释放资源。
 
 ## 7. 执行、并发与取消规约
 
