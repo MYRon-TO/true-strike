@@ -31,4 +31,7 @@
 
 - [系统范围](./core/Scope.md)：v1 目标、功能范围和版本边界；
 - [系统架构](./core/Architecture.md)：组件、状态所有权、依赖方向和执行边界；
-- [行为规约](./core/Contract.md)：跨组件行为、状态转换、消息和资源生命周期。
+- [行为规约](./core/Contract.md)：行为规约索引、基础约束和系统级不变量；
+  - [用例与命令](./core/Contract/UseCases.md)：端到端用例、命令边界和错误顺序；
+  - [状态机](./core/Contract/StateMachines.md)：应用生命周期、应用模式和 Actor 状态转换；
+  - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约。

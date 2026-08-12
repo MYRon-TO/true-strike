@@ -51,7 +51,15 @@ App Controller
 
 ## 3. 应用状态与控制
 
-### 3.1 AppState
+### 3.1 ApplicationLifecycle
+
+```text
+Starting → Running → ShuttingDown → Terminated
+```
+
+ApplicationLifecycle 描述应用进程生命周期，独立于 GUI 业务模式。`AppState` 仅在 `Running` 期间有效。进入 `ShuttingDown` 后拒绝后续应用命令，并按顺序停止 Camera Actor、取消当前检查、关闭 Worker 和 Actor、释放应用资源。
+
+### 3.2 AppState
 
 ```text
 AppState
@@ -79,11 +87,12 @@ ProductionMode
 
 Home 不持有检查配置、检查方案或 `ModeSessionId`。ProductionMode 的方案始终有效且不可变。
 
-### 3.2 App Controller
+### 3.3 App Controller
 
 App Controller 的职责：
 
 - 持有唯一的 `AppState`；
+- 持有并转换 `ApplicationLifecycle`；
 - 串行执行模式转换并维护模式资源；
 - 创建和管理 `ModeSessionId`；
 - 调用 Scheme Manager 完成配置操作；

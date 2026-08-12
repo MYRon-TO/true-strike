@@ -55,234 +55,34 @@
 
 ## 3. 用例与命令规约
 
-### 3.1 启动应用
+详细规约见 [Contract/UseCases.md](./Contract/UseCases.md)。
 
-- **触发方**：应用运行环境。
-- **前置状态**：应用尚未运行。
-- **输入**：待定义。
-- **处理过程**：初始化应用组件，Camera Actor 初始化摄像头并开始采集。
-- **成功结果**：应用进入 Home，摄像头持续采集。
-- **失败结果**：摄像头初始化失败时直接 `panic`；其他启动失败语义待定义。
-- **异步后续**：Camera Actor 持续发布最新帧。
-- **资源变化**：待定义。
+v1 用例包括：
 
-### 3.2 进入编辑模式
+1. 启动应用；
+2. 进入编辑模式；
+3. 进入生产模式；
+4. 返回主页；
+5. 修改配置草稿；
+6. 校验配置草稿；
+7. 保存配置草稿；
+8. 发起测试检查；
+9. 发起生产检查；
+10. 优雅关机。
 
-- **触发方**：GUI。
-- **前置状态**：Home。
-- **输入**：用户选择的配置文件路径。
-- **处理过程**：
-  1. Scheme Manager 读取并解析配置文件；
-  2. App Controller 创建内存草稿；
-  3. App Controller 生成新的 `ModeSessionId`；
-  4. 前述操作成功后提交状态转换。
-- **成功结果**：进入 EditMode，并持有配置路径和 Draft Config。
-- **失败结果**：返回 `ConfigLoadFailed`，保留 Home。
-- **异步后续**：无。
-- **资源变化**：EditMode 取得草稿和配置路径的所有权。
-
-### 3.3 进入生产模式
-
-- **触发方**：GUI。
-- **前置状态**：Home。
-- **输入**：用户选择的配置文件路径。
-- **处理过程**：
-  1. Scheme Manager 读取并解析配置文件；
-  2. 校验配置；
-  3. 构建不可变 Inspection Plan；
-  4. App Controller 生成新的 `ModeSessionId`；
-  5. 前述操作成功后提交状态转换。
-- **成功结果**：进入 ProductionMode，并持有配置、配置路径和有效方案。
-- **失败结果**：根据失败阶段返回 `ConfigLoadFailed`、`ConfigInvalid` 或 `PlanBuildFailed`，并保留 Home。
-- **异步后续**：无。
-- **资源变化**：ProductionMode 取得配置和生产方案的所有权。
-
-ProductionMode 运行期间不自动重新读取配置文件。
-
-### 3.4 返回主页
-
-- **触发方**：GUI。
-- **前置状态**：EditMode 或 ProductionMode。
-- **输入**：无。
-- **处理过程**：
-  1. App Controller 先将状态切换为 Home；
-  2. 释放原模式持有的配置、方案和展示对象；
-  3. 如果检查正在运行，则在后台请求取消。
-- **成功结果**：立即完成向 Home 的转换，不等待取消结束。
-- **失败结果**：待定义。
-- **异步后续**：可能继续执行检查取消流程。
-- **资源变化**：模式资源被释放；任务已固定的资源继续由 Inspection Actor 持有，直至任务终止。
-
-### 3.5 修改配置草稿
-
-- **触发方**：GUI。
-- **前置状态**：EditMode。
-- **输入**：草稿修改操作，具体类型待定义。
-- **处理过程**：App Controller 将修改应用到当前 Draft Config。
-- **成功结果**：内存草稿更新。
-- **失败结果**：修改校验层级及错误语义待定义。
-- **异步后续**：无。
-- **资源变化**：不修改配置文件，不创建或修改生产方案。
-
-### 3.6 校验配置草稿
-
-- **触发方**：GUI。
-- **前置状态**：EditMode。
-- **输入**：当前 Draft Config。
-- **处理过程**：待定义。
-- **成功结果**：待定义。
-- **失败结果**：`ConfigInvalid` 的结构待定义。
-- **异步后续**：无。
-- **资源变化**：不得修改草稿和配置文件。
-
-### 3.7 保存配置草稿
-
-- **触发方**：GUI。
-- **前置状态**：EditMode。
-- **输入**：当前 Draft Config 和原配置文件路径。
-- **处理过程**：
-  1. 校验草稿；
-  2. 确认草稿可以构建方案；
-  3. 计算递增后的 `revision`；
-  4. 将新配置写入临时文件；
-  5. 原子替换原配置文件；
-  6. 提交新的 `revision`；
-  7. 将内存草稿同步为新 `revision`。
-- **成功结果**：文件和内存草稿具有相同的新 `revision`，应用继续处于 EditMode。
-- **失败结果**：根据失败阶段返回 `ConfigInvalid`、`PlanBuildFailed` 或 `ConfigSaveFailed`。
-- **异步后续**：无。
-- **资源变化**：失败时原文件、原 `revision` 和内存草稿的 `revision` 均保持不变。
-
-### 3.8 发起测试检查
-
-- **触发方**：GUI。
-- **前置状态**：EditMode。
-- **输入**：无；使用当前 Draft Config。
-- **处理过程**：
-  1. App Controller 固定当前 `ModeSessionId` 和 Latest Frame Store 中的最新 Frame；
-  2. 从当前草稿校验并构建临时 Inspection Plan；
-  3. 按通用检查申请规约向 Inspection Actor 提交申请。
-- **成功结果**：Inspection Actor 接受申请并开始检查。
-- **失败结果**：可能返回 `NoFrame`、`ConfigInvalid`、`PlanBuildFailed` 或 `Busy`。
-- **异步后续**：产生检查完成、检查失败或检查超时事件；取消事件语义见第 7 节。
-- **资源变化**：临时方案只属于本次命令和对应任务，不进入 EditMode 持久状态。
-
-### 3.9 发起生产检查
-
-- **触发方**：GUI。
-- **前置状态**：ProductionMode。
-- **输入**：无；使用当前生产方案。
-- **处理过程**：
-  1. App Controller 固定当前 `ModeSessionId` 和 Latest Frame Store 中的最新 Frame；
-  2. 取得当前不可变生产方案；
-  3. 按通用检查申请规约向 Inspection Actor 提交申请。
-- **成功结果**：Inspection Actor 接受申请并开始检查。
-- **失败结果**：可能返回 `NoFrame` 或 `Busy`。
-- **异步后续**：产生检查完成、检查失败或检查超时事件；取消事件语义见第 7 节。
-- **资源变化**：任务获得 Frame 和 Inspection Plan 的独立共享引用。
-
-### 3.10 模式不匹配的检查命令
-
-- EditMode 只接受测试检查；
-- ProductionMode 只接受生产检查；
-- Home 不接受检查；
-- 检查类型与当前状态不匹配时返回 `InvalidMode`；
-- `InvalidMode` 不产生检查申请，不改变状态和资源。
-
-### 3.11 优雅关机
-
-- **触发方**：应用运行环境或 GUI。
-- **前置状态**：任意应用状态。
-- **输入**：无。
-- **处理过程**：请求取消正在运行的检查，并等待取消结束；随后停止 Camera Actor 并关闭摄像头。
-- **成功结果**：待定义。
-- **失败结果**：待定义。
-- **异步后续**：无。
-- **资源变化**：全部应用资源的释放顺序待定义。
-
-取消完成的通知与等待协议待定义。
+模式不匹配不是独立用例，而是测试检查和生产检查命令的公共拒绝分支。
 
 ## 4. 状态机规约
 
-### 4.1 AppState 状态机
+详细规约见 [Contract/StateMachines.md](./Contract/StateMachines.md)。
 
-状态：
+该子文档定义：
 
-```text
-Home
-EditMode(mode_session_id, config_path, draft_config, optional_presentation)
-ProductionMode(mode_session_id, config_path, loaded_config, production_plan, optional_presentation)
-```
-
-已定义转换：
-
-| 当前状态 | 输入 | 下一状态 | 条件 |
-| --- | --- | --- | --- |
-| Home | 进入编辑模式 | EditMode | 配置读取和解析成功 |
-| Home | 进入生产模式 | ProductionMode | 配置读取、校验和方案构建成功 |
-| EditMode | 返回主页 | Home | 无 |
-| ProductionMode | 返回主页 | Home | 无 |
-| 任意状态 | 关机 | 终止 | 等待协议待定义 |
-
-需要补充：
-
-- 模式进入命令执行期间是否需要显式过渡状态；
-- Home 文件选择结果是否属于 AppState；
-- 命令执行中的重复输入如何处理；
-- GUI 可观察状态与 AppState 的映射。
-
-### 4.2 Inspection Actor 状态机
-
-状态：
-
-```text
-Idle
-
-Running
-├── metadata
-├── started_at
-├── deadline
-├── cancellation
-├── pinned_frame
-└── pinned_plan
-
-Cancelling
-├── running_context
-├── cancellation_reason
-└── cancellation_deadline
-```
-
-已定义转换：
-
-| 当前状态 | 输入 | 下一状态 | 对外结果 |
-| --- | --- | --- | --- |
-| Idle | 合法检查申请 | Running | 接受申请 |
-| Running | 检查申请 | Running | `Busy` |
-| Cancelling | 检查申请 | Cancelling | `Busy` |
-| Running | 匹配的 `Completed` | Idle | 检查完成事件 |
-| Running | 匹配的 `Failed` | Idle | 检查失败事件 |
-| Running | 取消请求或执行超时 | Cancelling | 触发协作式取消 |
-| Cancelling | Worker 已停止 | Idle | 依取消原因处理事件 |
-| Cancelling | 取消宽限期耗尽 | 终止 | `panic` |
-
-需要补充：
-
-- Idle 收到取消请求的结果；
-- 重复取消的处理；
-- Worker 提交任务失败时的状态回滚；
-- Actor 关闭流程。
-
-### 4.3 Camera Actor 生命周期
-
-```text
-未启动 → 采集中 → 已停止
-```
-
-需要补充：
-
-- 启动和停止的确认语义；
-- 应用关机时与其他组件的停止顺序；
-- 摄像头状态如何投影给 GUI。
+- 独立于 AppState 的 ApplicationLifecycle；
+- AppState 模式转换；
+- Inspection Actor 状态机；
+- Camera Actor 生命周期；
+- 优雅关机期间的状态转换和取消确认。
 
 ## 5. 消息规约
 
@@ -302,6 +102,8 @@ Cancelling
 
 命令的具体类型、字段和同步响应形式待定义。
 
+ApplicationLifecycle 进入 `ShuttingDown` 后，队列中尚未处理及之后到达的应用命令统一返回 `ShuttingDown`，不执行命令内容。优雅关机命令本身在 ApplicationLifecycle 进入 `Terminated` 后完成。
+
 ### 5.2 检查申请
 
 App Controller 向 Inspection Actor 提交的检查申请至少包含：
@@ -318,10 +120,11 @@ Inspection Actor 串行处理申请：
 
 申请一旦被接受，应用模式、草稿、配置文件和 Latest Frame Store 的后续变化均不影响任务输入。
 
+检查申请仅在 Inspection Actor 已进入 `Running` 且 Worker 已接受任务后返回成功。Worker 任务提交失败属于内部基础设施失效，直接 `panic`。
+
 需要补充：
 
-- 申请被接受的响应类型；
-- Worker 提交失败的响应；
+- 申请成功响应的具体类型；
 - 请求与响应的关联方式。
 
 ### 5.3 Worker 任务
@@ -333,7 +136,7 @@ Inspection Actor 向 Inspection Worker 提交的任务至少包含：
 - 固定的 Inspection Plan；
 - 取消信号。
 
-任务提交和接收的确认语义待定义。
+Worker 接受任务是检查申请成功的必要条件。具体确认消息类型待定义。
 
 ### 5.4 Worker 输出
 
@@ -352,9 +155,11 @@ Inspection Actor 向 App Controller 发送的事件至少包括：
 - 检查完成；
 - 检查失败；
 - 检查超时；
-- 取消完成，是否作为统一事件待定义。
+- 内部取消完成确认。
 
-所有可能更新模式展示状态的事件必须携带 `ModeSessionId`。事件载荷及统一事件类型待定义。
+所有可能更新模式展示状态的事件必须携带 `ModeSessionId`。内部取消完成确认必须携带 `inspection_id` 和取消原因，用于返回 Home 后的后台清理或优雅关机等待；它不生成正常结果或展示。事件载荷及统一事件类型待定义。
+
+Inspection Actor 还必须发布其最新状态投影，至少区分 `Idle`、`Running(metadata)` 和 `Cancelling(metadata, reason)`。App Controller 将该投影纳入 GUI 可观察状态。具体实现可以使用 watch、订阅通道或其他最新值机制，本规约不作限定。
 
 ### 5.6 异步事件过滤
 
@@ -389,12 +194,12 @@ Camera Actor 从 SDK 获得图像后：
 
 ### 6.2 检查帧
 
-App Controller 处理合法检查触发命令时，从 Latest Frame Store 读取最新 Frame，并将其固定为本次检查输入。
+App Controller 完成检查方案准备、准备提交检查申请时，从 Latest Frame Store 读取最新 Frame，并将其固定为本次检查输入。
 
 - 没有可用帧时返回 `NoFrame`，不提交检查申请；
 - Inspection Actor 不再次读取 Latest Frame Store；
 - 后续发布的新帧不影响该检查；
-- 申请失败时释放本次命令临时持有的 Frame；
+- 申请失败时，申请对象销毁，其持有的 Frame 共享引用随之释放；
 - 申请成功后，Inspection Actor 持有 Frame，直至任务终止；
 - 检查完成或失败事件持有供展示使用的独立共享引用。
 
@@ -404,16 +209,17 @@ App Controller 处理合法检查触发命令时，从 Latest Frame Store 读取
 - 修改草稿只改变内存状态；
 - 草稿变化不创建或修改生产方案；
 - 返回 Home 时释放草稿；
-- 保存成功后只同步其 `revision` 和已保存内容，具体同步模型待定义。
+- 保存成功后，内存草稿同步为已提交的新 `revision`；除 `revision` 外，其逻辑内容与磁盘配置一致。
 
 ### 6.4 Inspection Plan
 
-- Inspection Plan 从有效配置构建，且构建后不可变；
-- 生产方案由 ProductionMode 持有；
-- 测试方案只属于单次测试检查；
-- 方案不得使用空值表示缺少方案，但阶段列表可以为空；
-- 禁用阶段不得执行，其在构建后方案中的表示方式待定义；
-- 申请成功后，Inspection Actor 持有任务方案，直至任务终止。
+方案的构建边界和所有权详见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)。
+
+- Scheme Manager 将有效配置构建为不可变可执行 Inspection Plan；
+- Inspection Actor 和 Inspection Worker 均不构建或组装方案；
+- 裸闭包不作为跨组件契约；
+- 申请成功后，Inspection Actor 持有任务方案，直至任务终止；
+- 申请被拒绝时，申请对象销毁，其持有的方案共享引用随之释放。
 
 ### 6.5 InspectionPresentation
 
@@ -500,7 +306,7 @@ Inspection Actor 在 `Running` 状态处理取消时：
 - Actor 释放固定帧和方案，并切换为 `Idle`；
 - Worker 未在宽限期内停止时直接 `panic`。
 
-返回 Home 或关机触发的取消不生成正常检查结果。其取消完成通知和等待语义待定义。
+返回 Home 或关机触发的取消不生成正常检查结果。Worker 停止后，Inspection Actor 释放任务资源、切换为 `Idle`，并发布内部取消完成确认。返回 Home 不等待该确认；优雅关机必须等待该确认或确认 Actor 已处于 `Idle`。
 
 ### 7.7 完成与取消的竞争
 
@@ -512,66 +318,24 @@ Inspection Actor 以串行事件处理顺序裁决完成与取消：
 
 ### 7.8 其他竞争场景
 
-需要补充：
+App Controller 收到的应用命令按串行处理顺序执行。配置保存与测试检查、重复 GUI 命令均不并行处理。
 
-- 返回 Home 与新检查申请的竞争；
-- 关机与检查完成的竞争；
-- 检查申请与检查超时计时起点的关系；
-- 配置保存与测试检查触发的顺序；
-- GUI 重复提交同一命令的处理。
+- 模式不匹配以 App Controller 开始处理检查命令时的 AppState 为准；
+- 关机命令之前的应用命令先完成，之后的命令返回 `ShuttingDown`；
+- 关机与检查完成或失败的竞争由 Inspection Actor 的事件处理顺序裁决；
+- 检查申请与检查超时计时起点的关系待定义。
 
 ## 8. 配置、方案与算子规约
 
-### 8.1 配置有效性
+详细规约见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)。
 
-一份配置只有同时满足以下条件才可构建方案：
+该子文档定义：
 
-- 结构和字段有效；
-- `operator_id` 均对应已注册算子；
-- 算子参数可以解析并通过各自校验；
-- 判定规则有效；
-- 配置不包含可执行代码、任意函数地址或未注册算子。
-
-构建失败不得产生可执行方案。
-
-### 8.2 方案构建
-
-方案构建遵循配置顺序，解析已启用的算子及其参数，生成不可变 Inspection Plan。
-
-需要补充：
-
-- 配置校验与方案构建的错误边界；
-- 参数解析后的类型表示；
-- 禁用阶段的构建语义；
-- 算子注册表的查询契约。
-
-### 8.3 算子输入输出
-
-待定义：
-
-- 算子的输入类型；
-- 阶段之间的数据传递模型；
-- 阶段输出和累积结果；
-- 算子失败语义；
-- 取消检查频率和责任边界。
-
-### 8.4 判定规则
-
-待定义：
-
-- 判定规则可读取的数据；
-- 判定执行时点；
-- 空阶段方案的判定语义；
-- 判定规则失败的错误语义。
-
-### 8.5 可视化数据
-
-待定义：
-
-- 可视化数据的坐标系和关联帧；
-- 多阶段可视化数据的合并语义；
-- 无可视化数据的表示；
-- GUI 可依赖的最小展示契约。
+- 配置有效性；
+- Scheme Manager 构建不可变可执行 Inspection Plan 的边界；
+- 方案所有权和申请被拒绝时的释放语义；
+- Inspection Plan 与内部闭包实现的边界；
+- 待细化的算子输入输出、判定规则和可视化数据。
 
 ## 9. 错误与结果语义
 
@@ -586,6 +350,7 @@ Inspection Actor 以串行事件处理顺序裁决完成与取消：
 - `ConfigSaveFailed`：配置未能按保存事务提交；
 - `InspectionFailed`：Inspection Core 执行失败，并生成关联帧的失败展示；
 - `InspectionTimedOut`：检查超时，且 Worker 已在取消宽限期内停止。
+- `ShuttingDown`：应用已开始关机，当前命令不再执行。
 
 需要为每项错误补充：
 
@@ -599,9 +364,10 @@ Inspection Actor 以串行事件处理顺序裁决完成与取消：
 
 以下错误不属于可恢复业务错误，直接 `panic`：
 
-- 摄像头初始化失败；
-- 摄像头采集失败；
-- Worker 未在取消宽限期内停止。
+- 任一组件初始化失败；
+- 摄像头采集或关闭失败；
+- Worker 未在取消宽限期内停止；
+- 组件关闭失败或内部通信基础设施失效。
 
 其他内部不变量被破坏时的处理待定义。
 
@@ -638,6 +404,10 @@ Inspection Actor 以串行事件处理顺序裁决完成与取消：
 18. 每个被接受的检查最终必须释放 Actor 持有的 Frame 和 Inspection Plan，或因致命错误终止进程。
 19. InspectionPresentation 持有关联检查帧。
 20. 生产方案和测试任务方案都不为空，但允许阶段列表为空。
+21. `ShuttingDown` 不属于 AppState，且进入后不可恢复为 `Running`。
+22. 关机开始后不再执行后续应用命令。
+23. 优雅关机必须先停止 Camera Actor，再等待当前检查终止。
+24. ApplicationLifecycle 只有在运行组件停止且运行期资源释放后才能进入 `Terminated`。
 
 后续每增加一个命令、状态或消息，都应检查其是否保持以上不变量。
 
@@ -675,9 +445,8 @@ Inspection Actor 以串行事件处理顺序裁决完成与取消：
 
 1. GUI 可持有的展示状态投影及其与 AppState 的边界；
 2. Home 文件选择结果的状态归属；
-3. 取消完成通知和优雅关机等待协议；
-4. 算子输入输出和阶段间数据传递模型；
-5. 判定规则及空阶段方案语义；
-6. 多阶段可视化数据的合并语义；
-7. 状态机章节中列出的未定义输入与竞争场景；
+3. 算子输入输出和阶段间数据传递模型；
+4. 判定规则及空阶段方案语义；
+5. 多阶段可视化数据的合并语义；
+6. 消息和错误的具体类型结构。
 8. 消息和错误的具体类型结构。
