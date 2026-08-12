@@ -57,7 +57,7 @@ App Controller
 Starting → Running → ShuttingDown → Terminated
 ```
 
-ApplicationLifecycle 描述应用进程生命周期，独立于 GUI 业务模式。`AppState` 仅在 `Running` 期间有效。进入 `ShuttingDown` 后拒绝后续应用命令，并按顺序停止 Camera Actor、取消当前检查、关闭 Worker 和 Actor、释放应用资源。
+ApplicationLifecycle 描述应用进程生命周期，独立于 GUI 业务模式。`AppState` 仅在 `Running` 期间有效。进入 `ShuttingDown` 后拒绝后续普通命令，并启动异步、严格分阶段的关机协调：先停止 Camera Actor，再取消并等待当前检查，随后关闭 Worker 和 Actor、释放应用资源。异步等待不得阻塞 Actor 或运行时执行线程。
 
 ### 3.2 AppState
 
@@ -85,7 +85,7 @@ ProductionMode
 └── optional_presentation
 ```
 
-Home 不持有检查配置、检查方案或 `ModeSessionId`。ProductionMode 的方案始终有效且不可变。
+Home 不持有文件选择结果、检查配置、检查方案或 `ModeSessionId`。文件选择对话框和候选路径属于 GUI 本地交互状态。ProductionMode 的方案始终有效且不可变。
 
 ### 3.3 App Controller
 
@@ -98,8 +98,8 @@ App Controller 的职责：
 - 调用 Scheme Manager 完成配置操作；
 - 从 Latest Frame Store 固定检查使用的帧；
 - 向 Inspection Actor 提交已经完成模式级准备的检查请求；
-- 接收检查事件并更新当前模式的展示状态；
-- 协调返回主页和应用关机时的检查取消。
+- 接收检查事件，将领域状态纯投影为不可变的 GUI 最新值快照；
+- 返回主页时按 `inspection_id` 精确取消任务，关机时在摄像头停止后取消当前任务。
 
 GUI、Scheme Manager 和 Inspection Actor 均不持有 `AppState` 副本。Inspection Actor 不读取共享的应用模式。
 
@@ -130,15 +130,18 @@ Camera Actor 是摄像头及其 SDK 的唯一访问者，负责：
 
 Camera Actor 不等待 GUI 或检查任务，不执行检查逻辑，不读写配置，也不建立待处理帧队列。
 
-生命周期：
+状态模型：
 
 ```text
-应用启动 → 初始化并开始采集
-应用运行 → 跨应用状态持续采集
-应用退出 → 停止采集并关闭摄像头
+NotStarted → Capturing → Stopping → Stopped
 ```
 
-摄像头初始化或采集失败时直接 `panic`。
+- `NotStarted` 只在应用启动期间允许启动；
+- `Capturing` 跨所有 AppState 持续采集；
+- `Stopping` 停止采集循环并关闭 SDK，进入后不再发布新 Frame；
+- `Stopped` 表示 SDK 已关闭且不会再发布 Frame，v1 不允许重新启动。
+
+Camera Actor 不设置独立 `Starting` 状态，初始化过程由 ApplicationLifecycle 的 `Starting` 覆盖。初始化、采集或关闭失败时直接 `panic`。已发布或由检查固定的 Frame 不受摄像头停止影响。
 
 ### 4.3 Latest Frame Store
 
@@ -193,27 +196,33 @@ Scheme Manager 不持有 AppState、当前模式、编辑草稿或当前方案�
 
 ### 6.1 Inspection Actor
 
-Inspection Actor 串行管理测试检查和生产检查。其状态模型为：
+Inspection Actor 串行管理测试检查和生产检查。其组件生命周期与任务状态分离：
 
 ```text
+InspectionActorLifecycle:
+Active → Closing → Closed
+
+InspectionTaskState（仅 Active 时有效）:
 Idle
 
 Running
 ├── metadata
 ├── started_at
-├── deadline
+├── execution_started
+├── execution_deadline
 ├── cancellation
 ├── pinned_frame
 └── pinned_plan
 
 Cancelling
 ├── running_context
+├── cancellation_reason
 └── cancellation_deadline
 ```
 
-Inspection Actor 接收已经固定帧和方案的请求，不读取 AppState、Latest Frame Store 或配置文件。
+`started_at` 是业务 UTC 时间；执行起点和两个截止时间使用进程内单调时钟。Inspection Actor 接收已经固定帧和方案的请求，不读取 AppState、Latest Frame Store 或配置文件。
 
-`Running` 和 `Cancelling` 均持有任务资源并拒绝新检查。`Cancelling` 持续到 Worker 确认停止。
+`Running` 和 `Cancelling` 均持有任务资源并拒绝新检查。第一个触发 `Cancelling` 的原因固定，重复取消不覆盖原因或延长截止时间。`Cancelling` 持续到收到当前任务匹配的 `Completed`、`Failed` 或 `Cancelled`；三者均证明 Worker 已停止，但取消后的完成输出和失败错误不进入业务结果。任务回到 `Idle` 后，Actor 才能关闭。
 
 ### 6.2 InspectionMetadata
 
@@ -233,7 +242,7 @@ InspectionMetadata
 
 Inspection Worker 在独立工作线程中同步执行 Inspection Core，同一时间只执行一个任务。
 
-它接收 Actor 固定的帧、方案和取消信号，返回核心输出、检查错误或取消结果。Worker 不管理应用状态，不访问帧存储、GUI 或配置文件，也不强制终止工作线程。
+它接收 Actor 固定的帧、方案和取消信号，每个任务只返回一个终止输出：核心输出、检查错误或取消结果。任务成功提交到 Worker 任务入口即定义为 Worker 已接受。Worker 不管理应用状态，不访问帧存储、GUI 或配置文件，也不强制终止工作线程。
 
 ### 6.4 Inspection Core
 
@@ -284,6 +293,8 @@ GUI 不直接转换 AppState，不直接访问 Camera Actor 或 Inspection Actor
 
 GUI 按自身刷新节奏读取最新帧，允许跳帧且不维护待显示帧队列。
 
+GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将其与自身领域状态纯组合为不可变 `AppViewSnapshot`；GUI 订阅快照并替换本地持有值，允许跳过中间版本。一次性命令结果使用事件传递，预览帧不进入完整快照。旧模式任务尚未终止时，当前模式的检查状态投影为 `BusyWithPreviousSession`。
+
 ## 8. 依赖与所有权约束
 
 1. Camera Actor 是摄像头的唯一访问者，也是 Latest Frame Store 的唯一写入者。
@@ -296,3 +307,6 @@ GUI 按自身刷新节奏读取最新帧，允许跳帧且不维护待显示帧�
 8. 检查任务持有自身固定的帧和方案。
 9. Inspection Core 及其算子不执行外部业务副作用。
 10. GUI 不积压预览帧，也不承载检查计算。
+11. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
+12. 返回 Home 使用 `inspection_id` 精确取消任务；`ModeSessionId` 只负责模式会话隔离。
+13. Camera Actor 进入 `Stopping` 后不再发布 Frame。

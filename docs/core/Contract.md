@@ -70,7 +70,7 @@ v1 用例包括：
 9. 发起生产检查；
 10. 优雅关机。
 
-模式不匹配不是独立用例，而是测试检查和生产检查命令的公共拒绝分支。
+模式不匹配不是独立用例，而是所有模式相关命令的公共拒绝分支；Home 中的返回主页命令除外，它幂等成功。
 
 ## 4. 状态机规约
 
@@ -100,7 +100,7 @@ v1 用例包括：
 - 发起生产检查；
 - 优雅关机。
 
-命令的具体类型、字段和同步响应形式待定义。
+命令的具体类型、字段和响应形式待定义。优雅关机异步发起，其响应在 ApplicationLifecycle 进入 `Terminated` 后完成；重复关机请求附着到同一关机流程。
 
 ApplicationLifecycle 进入 `ShuttingDown` 后，队列中尚未处理及之后到达的应用命令统一返回 `ShuttingDown`，不执行命令内容。优雅关机命令本身在 ApplicationLifecycle 进入 `Terminated` 后完成。
 
@@ -116,11 +116,10 @@ App Controller 向 Inspection Actor 提交的检查申请至少包含：
 Inspection Actor 串行处理申请：
 
 - 收到申请时处于 `Running` 或 `Cancelling`，立即返回 `Busy`；
-- 收到申请时处于 `Idle`，生成 `inspection_id` 和 InspectionMetadata，创建取消信号和截止时间，转入 `Running`，并向 Worker 提交任务。
+- 收到申请时处于 `Idle`，生成 `inspection_id` 和 InspectionMetadata，读取业务展示时间 `started_at`，创建取消信号并向 Worker 提交任务；
+- Worker 成功接受任务时读取单调时间，设置 `execution_started` 和 `execution_deadline`，单点提交 `Running` 并返回成功。
 
-申请一旦被接受，应用模式、草稿、配置文件和 Latest Frame Store 的后续变化均不影响任务输入。
-
-检查申请仅在 Inspection Actor 已进入 `Running` 且 Worker 已接受任务后返回成功。Worker 任务提交失败属于内部基础设施失效，直接 `panic`。
+申请一旦被接受，应用模式、草稿、配置文件和 Latest Frame Store 的后续变化均不影响任务输入。Worker 任务提交失败属于内部基础设施失效，直接 `panic`。
 
 需要补充：
 
@@ -136,7 +135,7 @@ Inspection Actor 向 Inspection Worker 提交的任务至少包含：
 - 固定的 Inspection Plan；
 - 取消信号。
 
-Worker 接受任务是检查申请成功的必要条件。具体确认消息类型待定义。
+Worker 接受任务是检查申请成功的必要条件。任务成功提交到 Worker 任务入口即定义为 Worker 已接受，不增加额外异步确认消息。
 
 ### 5.4 Worker 输出
 
@@ -159,7 +158,7 @@ Inspection Actor 向 App Controller 发送的事件至少包括：
 
 所有可能更新模式展示状态的事件必须携带 `ModeSessionId`。内部取消完成确认必须携带 `inspection_id` 和取消原因，用于返回 Home 后的后台清理或优雅关机等待；它不生成正常结果或展示。事件载荷及统一事件类型待定义。
 
-Inspection Actor 还必须发布其最新状态投影，至少区分 `Idle`、`Running(metadata)` 和 `Cancelling(metadata, reason)`。App Controller 将该投影纳入 GUI 可观察状态。具体实现可以使用 watch、订阅通道或其他最新值机制，本规约不作限定。
+Inspection Actor 还必须发布其最新状态投影，至少区分 `Idle`、`Running(metadata)` 和 `Cancelling(metadata, reason)`。App Controller 将该投影与当前 `ModeSessionId` 组合；旧会话任务尚未终止时，对当前模式投影为 `BusyWithPreviousSession`。具体实现可以使用 watch、订阅通道或其他最新值机制。
 
 ### 5.6 异步事件过滤
 
@@ -171,6 +170,14 @@ App Controller 仅在事件的 `ModeSessionId` 与当前 EditMode 或 Production
 - 当前模式的 `ModeSessionId` 与事件不一致。
 
 丢弃事件不影响 Inspection Actor 自身的状态转换和资源释放。
+
+### 5.7 检查取消与关闭
+
+返回 Home 时，App Controller 使用 `inspection_id` 精确取消离开模式时正在执行的任务；请求同时携带 `ModeSessionId` 和 `ReturnHome` 原因。Inspection Actor 以 `inspection_id` 判断目标是否匹配，`ModeSessionId` 只用于一致性检查和诊断。
+
+优雅关机在 Camera Actor 确认 `Stopped` 后发送 `CancelCurrentForShutdown`。该消息取消 Inspection Actor 当前唯一任务；取消完成确认携带实际 `inspection_id` 和固定的取消原因。
+
+第一个触发 `Running → Cancelling` 的原因固定。重复取消只能附着等待，不得覆盖原因或延长最初的取消宽限期。Inspection Actor 只有在任务状态为 `Idle` 时才能关闭；具体取消、关闭和确认类型待定义。
 
 ## 6. 资源生命周期规约
 
@@ -236,7 +243,7 @@ GUI 只保留当前模式最近一次 InspectionPresentation。展示对象至�
 - 新展示替换旧展示时释放旧帧引用；
 - 离开当前模式时释放展示对象。
 
-GUI 展示状态投影及其与 AppState 的边界待定义。
+GUI 不持有或长期借用 AppState。App Controller 将领域状态纯投影为不可变 `AppViewSnapshot`，以替换式最新值语义发布；GUI 订阅快照并替换本地持有值，可以跳过中间版本。一次性命令结果使用事件传递，高频预览帧仍由 GUI 按刷新节奏从 Latest Frame Store 读取。Home 的文件选择对话框状态和候选路径属于 GUI 本地状态。详细规则见 [状态机规约](./Contract/StateMachines.md#33-gui-可观察状态投影)。
 
 ## 7. 执行、并发与取消规约
 
@@ -286,22 +293,23 @@ Inspection Actor 在 `Running` 状态处理匹配当前 `inspection_id` 的 `Fai
 
 ### 7.5 进入 Cancelling
 
-Inspection Actor 在 `Running` 状态处理取消时：
+Inspection Actor 在 `Running` 状态处理首次匹配的取消时：
 
 1. 切换为 `Cancelling`；
 2. 保留原任务上下文、帧和方案；
 3. 设置取消信号；
-4. 记录取消原因和取消截止时间；
+4. 固定取消原因并使用单调时钟设置取消截止时间；
 5. 拒绝后续检查申请。
 
-`Cancelling` 持续到 Worker 确认停止。系统不强制终止 Worker 线程。
+`Cancelling` 持续到 Worker 终止。重复取消只能附着等待，不得覆盖首次取消原因或延长取消截止时间。系统不强制终止 Worker 线程。
 
 ### 7.6 取消结果
 
+Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `Cancelled`。Inspection Actor 进入 `Cancelling` 后，匹配当前 `inspection_id` 的任一终止输出均证明 Worker 已停止；`Completed` 的核心输出和 `Failed` 的错误均被丢弃，不生成正常结果或失败展示。
+
 因检查超时进入 `Cancelling` 后：
 
-- Worker 在宽限期内停止时丢弃其输出；
-- Inspection Actor 发送携带 `ModeSessionId` 的 `InspectionTimedOut` 事件；
+- Worker 在宽限期内停止时，Inspection Actor 发送携带 `ModeSessionId` 的 `InspectionTimedOut` 事件；
 - 超时检查不生成正常 InspectionResult；
 - Actor 释放固定帧和方案，并切换为 `Idle`；
 - Worker 未在宽限期内停止时直接 `panic`。
@@ -313,17 +321,19 @@ Inspection Actor 在 `Running` 状态处理取消时：
 Inspection Actor 以串行事件处理顺序裁决完成与取消：
 
 - 先处理完成或失败事件时，任务按对应结果结束；
-- 先处理取消事件并进入 `Cancelling` 时，之后到达的完成或失败输出一律丢弃；
+- 先处理取消事件并进入 `Cancelling` 时，之后到达的匹配终止输出只用于证明 Worker 已停止，其业务载荷一律丢弃；
 - 过期或 `inspection_id` 不匹配的 Worker 事件不得改变当前状态。
 
 ### 7.8 其他竞争场景
 
 App Controller 收到的应用命令按串行处理顺序执行。配置保存与测试检查、重复 GUI 命令均不并行处理。
 
-- 模式不匹配以 App Controller 开始处理检查命令时的 AppState 为准；
+- 模式不匹配以 App Controller 开始处理命令时的 AppState 为准；
 - 关机命令之前的应用命令先完成，之后的命令返回 `ShuttingDown`；
+- 关机采用异步、严格分阶段的协调流程：先等待 Camera Actor 停止，再取消并等待检查任务，最后关闭 Worker 和各 Actor；
+- 同一关机阶段内无依赖的关闭操作可以并行发起并统一等待，异步等待不得阻塞 Actor 或运行时执行线程；
 - 关机与检查完成或失败的竞争由 Inspection Actor 的事件处理顺序裁决；
-- 检查申请与检查超时计时起点的关系待定义。
+- `started_at` 使用业务 UTC 时间；执行超时从 Worker 成功接受任务时开始，使用进程内单调时钟。
 
 ## 8. 配置、方案与算子规约
 
@@ -343,7 +353,7 @@ App Controller 收到的应用命令按串行处理顺序执行。配置保存�
 
 - `Busy`：Inspection Actor 收到申请时已有检查正在运行或取消中；
 - `NoFrame`：App Controller 固定检查帧时没有可用帧；
-- `InvalidMode`：检查类型与 App Controller 当前状态不匹配；
+- `InvalidMode`：应用命令与 App Controller 当前 AppState 不匹配；至少携带命令、实际模式和期望模式；
 - `ConfigLoadFailed`：配置读取或解析失败；
 - `ConfigInvalid`：配置未通过校验；
 - `PlanBuildFailed`：配置无法构建可执行方案；
@@ -408,6 +418,10 @@ App Controller 收到的应用命令按串行处理顺序执行。配置保存�
 22. 关机开始后不再执行后续应用命令。
 23. 优雅关机必须先停止 Camera Actor，再等待当前检查终止。
 24. ApplicationLifecycle 只有在运行组件停止且运行期资源释放后才能进入 `Terminated`。
+25. 返回 Home 以 `inspection_id` 精确取消任务，`ModeSessionId` 不承担任务取消标识职责。
+26. 第一个触发 `Cancelling` 的原因固定，重复取消不得覆盖原因或延长取消截止时间。
+27. Camera Actor 进入 `Stopping` 后不得再发布 Frame。
+28. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
 
 后续每增加一个命令、状态或消息，都应检查其是否保持以上不变量。
 
@@ -443,10 +457,7 @@ App Controller 收到的应用命令按串行处理顺序执行。配置保存�
 
 ## 12. 待讨论事项
 
-1. GUI 可持有的展示状态投影及其与 AppState 的边界；
-2. Home 文件选择结果的状态归属；
-3. 算子输入输出和阶段间数据传递模型；
-4. 判定规则及空阶段方案语义；
-5. 多阶段可视化数据的合并语义；
-6. 消息和错误的具体类型结构。
-8. 消息和错误的具体类型结构。
+1. 算子输入输出和阶段间数据传递模型；
+2. 判定规则及空阶段方案语义；
+3. 多阶段可视化数据的合并语义；
+4. 消息和错误的具体类型结构。
