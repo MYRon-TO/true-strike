@@ -221,7 +221,7 @@ Cancelling
 
 InspectionMetadata 中的 `started_at` 是业务 UTC 时间；执行起点和两个截止时间使用进程内单调时钟，仅属于 Actor 运行上下文。Inspection Actor 接收已经固定帧和方案的请求，不读取 AppState、Latest Frame Store 或配置文件。
 
-`Running` 和 `Cancelling` 均持有任务资源并拒绝新检查。第一个触发 `Cancelling` 的原因固定，重复取消不覆盖原因或延长截止时间。`Cancelling` 持续到收到当前任务匹配的 `Completed`、`Failed` 或 `Cancelled`；三者均证明 Worker 已停止，但取消后的完成输出和失败错误不进入业务结果。任务回到 `Idle` 后，Actor 才能关闭。
+`Running` 和 `Cancelling` 均持有任务资源并拒绝新检查。第一个触发 `Cancelling` 的原因固定，重复取消不覆盖原因或延长截止时间。`Cancelling` 持续到收到当前任务匹配的 `Completed`、`Failed` 或 `Cancelled`；三者均证明当前检查任务执行已经终止，但取消后的完成输出和失败错误不进入业务结果。任务回到 `Idle` 后，Actor 才能关闭。
 
 ### 6.2 InspectionMetadata
 

@@ -211,7 +211,7 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
 关机与检查完成或失败的竞争由 Inspection Actor 的串行处理顺序裁决：
 
 - Actor 先处理完成或失败输出时，任务正常结束，随后关机取消请求立即响应 `InspectionBecameIdle(None)`；
-- Actor 先处理关机取消请求时，进入 `Cancelling`；之后到达的匹配 `Completed`、`Failed` 或 `Cancelled` 均证明 Worker 已停止，其中完成输出和失败错误一律丢弃；
+- Actor 先处理关机取消请求时，进入 `Cancelling`；之后到达的匹配 `Completed`、`Failed` 或 `Cancelled` 均证明当前检查任务执行已经终止，其中完成输出和失败错误一律丢弃；
 - 因关机取消的检查不生成正常结果、失败展示或面向 GUI 的超时结果；
 - Worker 的匹配终止输出到达后，Inspection Actor 释放任务资源、回到 `Idle`，并完成 `InspectionBecameIdle` 响应。
 

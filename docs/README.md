@@ -52,5 +52,6 @@
   - [用例与命令](./core/Contract/UseCases.md)：端到端用例、命令边界和错误顺序；
   - [状态机](./core/Contract/StateMachines.md)：应用生命周期、应用模式和 Actor 状态转换；
   - [消息规约](./core/Contract/Messages.md)：异步消息、请求响应、领域事件、投影和组件控制消息；
-  - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约；
-  - [资源生命周期](./core/Contract/Resources.md)：运行期资源的创建、持有、共享、转移和释放边界。
+  - [资源生命周期](./core/Contract/Resources.md)：运行期资源的创建、持有、共享、转移和释放边界；
+  - [执行、并发与取消](./core/Contract/ExecutionAndCancellation.md)：执行边界、时间语义、协作式取消和竞争裁决；
+  - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约。

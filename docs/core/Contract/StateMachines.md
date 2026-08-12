@@ -225,7 +225,7 @@ CancelCurrentForShutdown -> InspectionBecameIdle
 
 ### 4.4 Cancelling 的终止语义
 
-Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `Cancelled`。Actor 已进入 `Cancelling` 后，匹配当前 `inspection_id` 的任一终止输出都证明 Worker 已停止：
+Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `Cancelled`。Actor 已进入 `Cancelling` 后，匹配当前 `inspection_id` 的任一终止输出都证明当前检查任务执行已经终止：
 
 | 输入 | 下一状态 | 处理 |
 | --- | --- | --- |
@@ -245,7 +245,7 @@ Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `
 ### 4.5 完成与取消的竞争
 
 - Actor 先处理匹配的完成或失败输出时，任务按对应结果结束；随后到达的会话取消被忽略，关机取消立即响应 `InspectionBecameIdle(None)`；
-- Actor 先处理取消请求并进入 `Cancelling` 时，之后到达的任一匹配终止输出只用于证明 Worker 已停止，其业务输出一律丢弃；
+- Actor 先处理取消请求并进入 `Cancelling` 时，之后到达的任一匹配终止输出只用于证明当前检查任务执行已经终止，其业务输出一律丢弃；
 - Actor 先处理执行超时时，超时成为固定取消原因；
 - App Controller 进入 `ShuttingDown` 后不得用迟到的检查事件更新 GUI。
 

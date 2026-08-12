@@ -264,10 +264,10 @@ InspectionEvent
 
 - `InspectionCompleted` 只由 `Running` 中匹配的 `Completed` 输出产生；
 - `InspectionFailed` 只由 `Running` 中匹配的 `Failed` 输出产生；
-- `InspectionTimedOut` 只在取消原因为 `Timeout` 且 Worker 已于取消宽限期内停止后产生；
+- `InspectionTimedOut` 只在取消原因为 `Timeout`，且 Actor 在适用的取消截止消息之前处理到匹配 WorkerOutcome 后产生；
 - `InspectionTimedOut` 不携带 Frame 或 InspectionPresentation，不替换当前模式已有的最近一次展示对象；
 - 因 `ReturnHome` 或 `Shutdown` 取消的任务不产生领域事件；
-- Actor 进入 `Cancelling` 后收到的匹配 `Completed` 或 `Failed` 只证明 Worker 已停止，其业务载荷被丢弃。
+- Actor 进入 `Cancelling` 后收到的匹配 `Completed` 或 `Failed` 只证明当前检查任务执行已经终止，其业务载荷被丢弃。
 
 领域事件中的 `mode_session_id` 通过 metadata 携带。事件一经构造便不再依赖 Actor 持有的任务资源。
 

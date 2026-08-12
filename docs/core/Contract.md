@@ -129,93 +129,28 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 ## 7. 执行、并发与取消规约
 
-### 7.1 Inspection Core 执行
+详细规约见 [Contract/ExecutionAndCancellation.md](./Contract/ExecutionAndCancellation.md)。
 
-Inspection Worker 将固定的 Frame、Inspection Plan 和取消信号显式传入 Inspection Core。
+该子文档定义：
 
-Inspection Core：
+- App Controller、各 Actor、Inspection Worker 和 Inspection Core 的串行及独立执行边界；
+- Worker 接受任务、执行超时起点、单调截止时间和计时器身份；
+- Inspection Core 的显式输入输出、通用取消检查点和算子内部取消责任；
+- 执行超时、返回 Home 和优雅关机三种取消来源及其匹配规则；
+- `Running` 与 `Cancelling` 中 WorkerOutcome 的终止处理和资源提交顺序；
+- 完成、失败、执行截止、取消截止及多个取消来源之间的竞争裁决；
+- 返回 Home 和优雅关机期间的并发规则。
 
-- 按方案的线性顺序执行算子；
-- 在阶段之间检查取消信号；
-- 长时间运行的算子定期检查取消信号；
-- 收到取消信号后尽快返回 `Cancelled`；
-- 不读取外部业务状态；
-- 不执行持久化或其他外部业务副作用。
+关键约束：
 
-### 7.2 正常完成
-
-Inspection Actor 在 `Running` 状态处理匹配当前 `inspection_id` 的 `Completed` 时：
-
-1. 使用 InspectionMetadata 和核心输出组装 InspectionResult；
-2. 使用结果和固定帧组装 InspectionPresentation；
-3. 向 App Controller 发送携带 `ModeSessionId` 的完成事件；
-4. 释放 Actor 持有的帧和方案；
-5. 切换为 `Idle`。
-
-### 7.3 执行失败
-
-Inspection Actor 在 `Running` 状态处理匹配当前 `inspection_id` 的 `Failed` 时：
-
-1. 使用 InspectionMetadata、检查错误和固定帧组装失败展示对象；
-2. 向 App Controller 发送携带 `ModeSessionId` 的失败事件；
-3. 释放 Actor 持有的帧和方案；
-4. 切换为 `Idle`。
-
-失败展示对象持有关联检查帧，并按与成功结果相同的会话隔离规则更新最近一次展示对象。
-
-### 7.4 取消来源
-
-取消可由以下原因触发：
-
-- 检查超时；
-- 返回 Home；
-- 应用优雅关机。
-
-检查执行超时和取消宽限期使用应用级固定值。
-
-### 7.5 进入 Cancelling
-
-Inspection Actor 在 `Running` 状态处理首次匹配的取消时：
-
-1. 切换为 `Cancelling`；
-2. 保留原任务上下文、帧和方案；
-3. 设置取消信号；
-4. 固定取消原因并使用单调时钟设置取消截止时间；
-5. 拒绝后续检查申请。
-
-`Cancelling` 持续到 Worker 终止。重复取消只能附着等待，不得覆盖首次取消原因或延长取消截止时间。系统不强制终止 Worker 线程。
-
-### 7.6 取消结果
-
-Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `Cancelled`。Inspection Actor 进入 `Cancelling` 后，匹配当前 `inspection_id` 的任一终止输出均证明 Worker 已停止；`Completed` 的核心输出和 `Failed` 的错误均被丢弃，不生成正常结果或失败展示。
-
-因检查超时进入 `Cancelling` 后：
-
-- Worker 在宽限期内停止时，Inspection Actor 发送携带 InspectionMetadata 的 `InspectionTimedOut` 事件；该事件不携带 Frame 或 InspectionPresentation，也不替换最近一次展示对象；
-- 超时检查不生成正常 InspectionResult；
-- Actor 释放固定帧和方案，并切换为 `Idle`；
-- Worker 未在宽限期内停止时直接 `panic`。
-
-返回 Home 或关机触发的取消不生成正常检查结果。Worker 停止后，Inspection Actor 释放任务资源并切换为 `Idle`。返回 Home 不等待取消完成；关机流程通过 `InspectionBecameIdle` 控制响应等待该边界。
-
-### 7.7 完成与取消的竞争
-
-Inspection Actor 以串行事件处理顺序裁决完成与取消：
-
-- 先处理完成或失败事件时，任务按对应结果结束；
-- 先处理取消事件并进入 `Cancelling` 时，之后到达的匹配终止输出只用于证明 Worker 已停止，其业务载荷一律丢弃；
-- 过期或 `inspection_id` 不匹配的 Worker 事件不得改变当前状态。
-
-### 7.8 其他竞争场景
-
-App Controller 收到的应用命令按串行处理顺序执行。配置保存与测试检查、重复 GUI 命令均不并行处理。
-
-- 模式不匹配以 App Controller 开始处理命令时的 AppState 为准；
-- 关机命令之前的应用命令先完成，之后的命令返回 `ShuttingDown`；
-- 关机采用异步、严格分阶段的协调流程：先等待 Camera Actor 停止，再取消并等待检查任务，最后关闭 Worker 和各 Actor；
-- 同一关机阶段内无依赖的关闭操作可以并行发起并统一等待，异步等待不得阻塞 Actor 或运行时执行线程；
-- 关机与检查完成或失败的竞争由 Inspection Actor 的事件处理顺序裁决；
-- `started_at` 使用业务 UTC 时间；执行超时从 Worker 成功接受任务时开始，使用进程内单调时钟。
+- 竞争输入以对应状态所有者的实际处理顺序裁决，不以发送时间、Core 返回时间或业务 UTC 时间裁决；
+- 执行和取消截止均为 Inspection Actor 可观察的裁决边界，先被 Actor 处理的适用输入胜出；
+- 每个被 Worker 接受的任务必须恰好产生一个 WorkerOutcome，任务终止不表示 Worker 工作线程退出；
+- 首次触发 `Cancelling` 的原因和取消截止时间固定，后续取消不得覆盖原因或延长截止时间；
+- `Cancelling` 持续到匹配的 WorkerOutcome 被处理，系统不强制终止 Worker 工作线程；
+- 进入 `Cancelling` 后，Completed 和 Failed 的业务载荷只能被丢弃，不得生成正常结果或失败展示；
+- 正常终止、失败终止和取消终止都必须撤销或失效任务计时器、释放完整任务上下文并提交 `Idle`；
+- 优雅关机必须先停止 Camera Actor，再取消并等待当前检查任务终止。
 
 ## 8. 配置、方案与算子规约
 
@@ -241,7 +176,7 @@ App Controller 收到的应用命令按串行处理顺序执行。配置保存�
 - `PlanBuildFailed`：配置无法构建可执行方案；
 - `ConfigSaveFailed`：配置未能按保存事务提交；
 - `InspectionFailed`：Inspection Core 执行失败，并生成关联帧的失败展示；
-- `InspectionTimedOut`：检查超时，且 Worker 已在取消宽限期内停止。
+- `InspectionTimedOut`：检查因执行超时进入取消，且 Actor 在适用的取消截止消息之前处理到匹配 WorkerOutcome。
 - `ShuttingDown`：应用已开始关机，当前命令不再执行。
 
 需要为每项错误补充：
@@ -258,7 +193,7 @@ App Controller 收到的应用命令按串行处理顺序执行。配置保存�
 
 - 任一组件初始化失败；
 - 摄像头采集或关闭失败；
-- Worker 未在取消宽限期内停止；
+- Actor 在匹配 WorkerOutcome 之前先处理适用的取消截止消息；
 - 组件关闭失败或内部通信基础设施失效。
 
 其他内部不变量被破坏时的处理待定义。

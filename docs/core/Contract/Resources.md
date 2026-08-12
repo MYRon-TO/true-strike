@@ -192,11 +192,11 @@ Worker 对每个已接受任务只产生一个终止输出，并在执行结束�
 
 - 不匹配、过期或 Actor 已为 `Idle` 的输出整体丢弃，并释放其中的核心输出或错误载荷；
 - `Running` 中匹配的 `Completed` 或 `Failed` 先构造独立的领域事件，再撤销或失效任务计时器、释放 Actor 的任务上下文并进入 `Idle`；
-- `Cancelling` 中匹配的任一终止输出只证明 Worker 已停止，Completed 的核心输出和 Failed 的错误均被释放，不构造正常结果或失败展示；
+- `Cancelling` 中匹配的任一终止输出只证明当前检查任务执行已经终止，Completed 的核心输出和 Failed 的错误均被释放，不构造正常结果或失败展示；
 - 取消完成后撤销或失效全部任务计时器，释放 Actor 的任务上下文并进入 `Idle`；
 - 附着的关机等待响应只在任务资源已释放且 Actor 已进入 `Idle` 后完成；
 - 因 Timeout 取消时，只发布不携带 Frame 或 InspectionPresentation 的 InspectionTimedOut；ReturnHome 或 Shutdown 取消不发布领域事件；
-- Worker 未在取消宽限期内停止时直接 `panic`。
+- Actor 在匹配 WorkerOutcome 之前先处理适用的取消截止消息时直接 `panic`。
 
 过期计时器消息只携带标识，不持有任务 Frame 或 Inspection Plan；撤销失败但可通过标识判定为过期的计时器消息必须被忽略。
 
