@@ -25,7 +25,7 @@
 - `started_at` 是业务展示时间，使用可展示和可序列化的 UTC 时间，随检查元数据和结果传递；
 - `execution_started`、`execution_deadline` 和 `cancellation_deadline` 使用进程内单调时钟，仅用于超时裁决，不进入业务结果。
 
-Inspection Actor 接受申请时读取业务时间和单调时间。执行截止时间从 Worker 成功接受任务时开始计算。首次进入 `Cancelling` 时计算取消截止时间；重复取消不得延长该截止时间。计时器事件必须携带 `inspection_id`，过期或身份不匹配的计时器事件直接丢弃。
+Inspection Actor 接受申请时读取业务时间并写入 InspectionMetadata。Worker 成功接受任务时读取单调时间并计算执行截止时间。首次进入 `Cancelling` 时读取单调时间并计算取消截止时间；重复取消不得延长该截止时间。计时器事件必须携带 `inspection_id`，过期或身份不匹配的计时器事件直接丢弃。
 
 ## 2. ApplicationLifecycle
 
@@ -58,12 +58,12 @@ Starting → Running → ShuttingDown → Terminated
 关机采用异步、严格分阶段的协调流程。等待是逻辑异步等待，不得阻塞 Actor 或异步运行时的执行线程：
 
 1. 请求 Camera Actor 停止采集并关闭摄像头，等待 `Stopped` 确认；
-2. Camera Actor 停止后，若 Inspection Actor 正在执行任务，则发送 `CancelCurrentForShutdown`，等待任务回到 `Idle`；若已为 `Idle`，直接继续；
+2. Camera Actor 停止后，发送 `CancelCurrentForShutdown` 并等待 `InspectionBecameIdle`；Actor 已为 `Idle` 时立即响应；
 3. 关闭 Inspection Worker 和各 Actor；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
 4. 释放原 AppState、Latest Frame Store 及其他应用资源；
 5. 提交 `Terminated`，完成所有附着到本次关机的等待者。
 
-检查取消宽限期从第二阶段实际发出取消请求时开始，不包含等待 Camera Actor 停止的时间。进入 `ShuttingDown` 后，正常命令接收边界必须继续能够立即拒绝后续命令，不得等到关机完成后才返回。
+如果关机取消首次触发 `Running → Cancelling`，取消宽限期从 Actor 实际处理 `CancelCurrentForShutdown` 时开始，不包含等待 Camera Actor 停止的时间；如果 Actor 已在取消中，关机等待附着到原流程且不重置截止时间。进入 `ShuttingDown` 后，正常命令接收边界必须继续能够立即拒绝后续命令，不得等到关机完成后才返回。
 
 `ShuttingDown` 不属于 GUI 业务模式，进入后不可返回 `Running`。原 `AppState` 不再是有效业务状态，不再接受观察或操作；App Controller 只为完成关机而持有并释放其资源，不需要先转换为 Home。
 
@@ -144,7 +144,6 @@ Idle
 
 Running
 ├── metadata
-├── started_at
 ├── execution_started
 ├── execution_deadline
 ├── cancellation
@@ -161,12 +160,12 @@ Cancelling
 
 Inspection Actor 在 `Idle` 中接受合法申请时：
 
-1. 生成 `inspection_id` 和 InspectionMetadata；
-2. 读取业务时间 `started_at`；
+1. 生成 `inspection_id` 并读取业务时间 `started_at`；
+2. 使用申请字段、`inspection_id` 和 `started_at` 构造完整且不可变的 InspectionMetadata；
 3. 创建取消信号并准备固定帧和固定方案的任务；
 4. 向 Worker 提交任务；
 5. Worker 成功接受任务时读取单调时间，设置执行截止时间并单点提交 `Running`；
-6. 发布最新状态投影并返回申请成功。
+6. 发布最新状态投影并返回包含 InspectionMetadata 的申请成功响应。
 
 Worker 成功接收任务即定义为 Worker 接受任务，不增加 `Submitting` 状态。任务提交失败属于内部基础设施失效，直接 `panic`，不执行状态回滚。
 
@@ -189,39 +188,40 @@ Worker 成功接收任务即定义为 Worker 接受任务，不增加 `Submittin
 
 正常完成或失败时，Actor 组装对应事件、释放其持有的帧和方案，并发布 `Idle` 投影。
 
-### 4.3 精确取消
+### 4.3 会话级取消与关机取消
 
-`ModeSessionId` 用于隔离模式会话的异步展示，`inspection_id` 用于唯一标识和取消具体任务，两者不得替代。
+`ModeSessionId` 用于模式事件隔离，并在返回 Home 时限定取消意图；`inspection_id` 用于唯一标识具体任务、Worker 输出和计时器。两者不得互相替代。
 
-返回 Home 时，App Controller 针对离开模式时正在执行的任务发送：
+返回 Home 时，App Controller 离开原模式并无条件发送：
 
 ```text
-CancelInspection(inspection_id, mode_session_id, ReturnHome)
+CancelInspectionForSession(mode_session_id, ReturnHome)
 ```
 
-Inspection Actor 以 `inspection_id` 判断目标是否匹配；`mode_session_id` 用于一致性检查和诊断。不得使用“取消某个 ModeSessionId 及以前的任务”语义。
+该通知不携带 `inspection_id`，也不要求响应。Inspection Actor 只将 `mode_session_id` 与当前唯一任务的 metadata 比较；它不维护会话任务集合，不使用“取消该会话及以前任务”的范围语义。
 
 优雅关机在 Camera Actor 已停止后发送：
 
 ```text
-CancelCurrentForShutdown
+CancelCurrentForShutdown -> InspectionBecameIdle
 ```
 
-该消息取消 Actor 当前唯一任务；取消完成确认仍须携带实际的 `inspection_id` 和取消原因。
+该请求取消 Actor 当前唯一任务或在 `Idle` 时立即响应。响应在任务终止、资源释放且 Actor 回到 `Idle` 后完成；如果 Actor 已在取消中，关机等待附着到原取消流程。
 
 取消处理规则：
 
 | 当前状态 | 输入 | 下一状态 | 结果 |
 | --- | --- | --- | --- |
-| Idle | 精确取消或关机取消 | Idle | 立即确认无需取消 |
-| Running | 匹配的精确取消 | Cancelling | 设置取消信号并记录原因和截止时间 |
-| Running | 关机取消 | Cancelling | 取消当前任务，原因记录为 `Shutdown` |
-| Running | 不匹配的精确取消 | Running | 确认目标已过期，不改变状态 |
-| Cancelling | 匹配的重复取消 | Cancelling | 附着到当前取消；不覆盖原因，不延长截止时间 |
-| Cancelling | 关机取消 | Cancelling | 关机流程附着等待；不覆盖原因，不延长截止时间 |
-| Cancelling | 不匹配的精确取消 | Cancelling | 确认目标已过期，不改变状态 |
+| Idle | 会话取消 | Idle | 忽略 |
+| Idle | 关机取消 | Idle | 立即响应 `InspectionBecameIdle(None)` |
+| Running | 会话匹配的会话取消 | Cancelling | 设置取消信号，原因固定为 `ReturnHome` |
+| Running | 会话不匹配的会话取消 | Running | 作为过期通知忽略 |
+| Running | 关机取消 | Cancelling | 设置取消信号，原因固定为 `Shutdown`，关机请求等待 |
+| Cancelling | 会话匹配的会话取消 | Cancelling | 保持原原因和截止时间 |
+| Cancelling | 会话不匹配的会话取消 | Cancelling | 作为过期通知忽略 |
+| Cancelling | 关机取消 | Cancelling | 关机请求附着等待；不覆盖原因，不延长截止时间 |
 
-第一个被 Actor 处理并触发 `Running → Cancelling` 的原因固定为最终取消原因。后续取消请求只能附着等待。关机是否等待任务终止由关机协调流程决定，不通过覆盖取消原因实现。
+第一个被 Actor 处理并触发 `Running → Cancelling` 的原因固定为最终取消原因。后续取消只能保持或附着等待。迟到的旧会话取消不得影响新会话任务。
 
 ### 4.4 Cancelling 的终止语义
 
@@ -235,16 +235,16 @@ Worker 对每个任务只产生一个终止输出：`Completed`、`Failed` 或 `
 | 匹配的取消宽限期超时 | 异常终止 | `panic` |
 | 不匹配的终止输出或计时器事件 | Cancelling | 丢弃 |
 
-进入 `Cancelling` 后不得再生成正常检查结果或失败展示。Actor 在 Worker 停止后释放任务资源并发布内部取消完成确认。
+进入 `Cancelling` 后不得再生成正常检查结果或失败展示。Actor 在 Worker 停止后释放任务资源、切换为 `Idle`，并完成附着的关机等待响应。
 
-- 取消原因为 `Timeout` 时，发布携带 `ModeSessionId` 的 `InspectionTimedOut`；该事件只在 Worker 已于宽限期内停止后发布；
-- 取消原因为 `ReturnHome` 或 `Shutdown` 时，不生成正常检查结果、失败展示或面向 GUI 的超时结果；
+- 取消原因为 `Timeout` 时，发布携带 InspectionMetadata 的 `InspectionTimedOut`；该事件只在 Worker 已于宽限期内停止后发布，不携带 Frame 或 InspectionPresentation，也不替换最近一次展示对象；
+- 取消原因为 `ReturnHome` 或 `Shutdown` 时，不生成领域事件；
 - 返回 Home 不等待取消完成；
-- 优雅关机必须等待取消完成确认或确认 Actor 已为 `Idle`。
+- 优雅关机必须等待 `InspectionBecameIdle` 响应。
 
 ### 4.5 完成与取消的竞争
 
-- Actor 先处理匹配的完成或失败输出时，任务按对应结果结束；随后到达的取消请求确认无需取消；
+- Actor 先处理匹配的完成或失败输出时，任务按对应结果结束；随后到达的会话取消被忽略，关机取消立即响应 `InspectionBecameIdle(None)`；
 - Actor 先处理取消请求并进入 `Cancelling` 时，之后到达的任一匹配终止输出只用于证明 Worker 已停止，其业务输出一律丢弃；
 - Actor 先处理执行超时时，超时成为固定取消原因；
 - App Controller 进入 `ShuttingDown` 后不得用迟到的检查事件更新 GUI。

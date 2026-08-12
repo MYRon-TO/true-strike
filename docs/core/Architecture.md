@@ -99,7 +99,7 @@ App Controller 的职责：
 - 从 Latest Frame Store 固定检查使用的帧；
 - 向 Inspection Actor 提交已经完成模式级准备的检查请求；
 - 接收检查事件，将领域状态纯投影为不可变的 GUI 最新值快照；
-- 返回主页时按 `inspection_id` 精确取消任务，关机时在摄像头停止后取消当前任务。
+- 返回主页时按被关闭的 `ModeSessionId` 请求取消属于该会话的当前任务，关机时在摄像头停止后取消并等待当前任务。
 
 GUI、Scheme Manager 和 Inspection Actor 均不持有 `AppState` 副本。Inspection Actor 不读取共享的应用模式。
 
@@ -207,7 +207,6 @@ Idle
 
 Running
 ├── metadata
-├── started_at
 ├── execution_started
 ├── execution_deadline
 ├── cancellation
@@ -220,7 +219,7 @@ Cancelling
 └── cancellation_deadline
 ```
 
-`started_at` 是业务 UTC 时间；执行起点和两个截止时间使用进程内单调时钟。Inspection Actor 接收已经固定帧和方案的请求，不读取 AppState、Latest Frame Store 或配置文件。
+InspectionMetadata 中的 `started_at` 是业务 UTC 时间；执行起点和两个截止时间使用进程内单调时钟，仅属于 Actor 运行上下文。Inspection Actor 接收已经固定帧和方案的请求，不读取 AppState、Latest Frame Store 或配置文件。
 
 `Running` 和 `Cancelling` 均持有任务资源并拒绝新检查。第一个触发 `Cancelling` 的原因固定，重复取消不覆盖原因或延长截止时间。`Cancelling` 持续到收到当前任务匹配的 `Completed`、`Failed` 或 `Cancelled`；三者均证明 Worker 已停止，但取消后的完成输出和失败错误不进入业务结果。任务回到 `Idle` 后，Actor 才能关闭。
 
@@ -233,10 +232,11 @@ InspectionMetadata
 ├── inspection_kind
 ├── frame_id
 ├── scheme_id
-└── scheme_revision
+├── scheme_revision
+└── started_at
 ```
 
-`inspection_kind` 为 `Test` 或 `Production`。元数据随请求结果和异步事件传递。
+`inspection_kind` 为 `Test` 或 `Production`；`started_at` 是 Actor 接受申请时读取的业务 UTC 时间。元数据随申请响应和异步检查事件传递。
 
 ### 6.3 Inspection Worker
 
@@ -308,5 +308,5 @@ GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发
 9. Inspection Core 及其算子不执行外部业务副作用。
 10. GUI 不积压预览帧，也不承载检查计算。
 11. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
-12. 返回 Home 使用 `inspection_id` 精确取消任务；`ModeSessionId` 只负责模式会话隔离。
+12. 返回 Home 使用被关闭的 `ModeSessionId` 请求取消当前属于该会话的任务；`inspection_id` 仍用于具体任务、Worker 输出和计时器关联。
 13. Camera Actor 进入 `Stopping` 后不再发布 Frame。

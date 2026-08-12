@@ -73,16 +73,16 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
 - **输入**：无。
 - **处理过程**：
   1. 当前已为 Home 时直接完成，不执行取消或资源释放；
-  2. 当前为 EditMode 或 ProductionMode 时，记录该模式正在执行的 `inspection_id` 和 `ModeSessionId`，再将状态切换为 Home；
+  2. 当前为 EditMode 或 ProductionMode 时，记录该模式的 `ModeSessionId`，再将状态切换为 Home；
   3. 释放原模式持有的配置、方案和展示对象；
-  4. 如果记录了正在执行的检查，则向 Inspection Actor 发送携带 `inspection_id`、`ModeSessionId` 和 `ReturnHome` 原因的精确取消请求。
+  4. 向 Inspection Actor 无条件发送携带该 `ModeSessionId` 和 `ReturnHome` 原因的会话级取消通知。
 - **成功结果**：进入或保持 Home，不等待取消结束。
 - **失败结果**：无业务失败；内部取消通信失效时直接 `panic`。
 - **状态转换**：EditMode 或 ProductionMode → Home；Home → Home 幂等成功。
-- **完成边界**：Home 已提交，模式资源已释放，必要的精确取消请求已发出。
+- **完成边界**：Home 已提交，模式资源已释放，会话级取消通知已发出。
 - **异步后续**：Inspection Actor 可能继续执行取消流程。
 - **资源变化**：原模式资源被释放；任务资源继续由 Inspection Actor 持有，直至任务终止。
-- **并发关系**：检查事件和返回主页命令按 App Controller 的串行处理顺序裁决。Home 提交后处理的旧会话事件不得更新展示状态。迟到或目标不匹配的精确取消不得影响其他任务。
+- **并发关系**：检查事件和返回主页命令按 App Controller 的串行处理顺序裁决。Home 提交后处理的旧会话事件不得更新展示状态。迟到或会话不匹配的取消通知不得影响其他任务。
 
 ## 5. 修改配置草稿
 
@@ -196,7 +196,7 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
   2. ApplicationLifecycle 为 `Running` 时，App Controller 将其原子地切换为 `ShuttingDown`，异步启动唯一的关机协调流程；
   3. 拒绝队列中排在首次关机命令之后及之后新到达的普通应用命令；
   4. 请求 Camera Actor 停止采集并关闭摄像头，异步等待其确认 `Stopped`；
-  5. Camera Actor 停止后，如果检查正在运行，则发送 `CancelCurrentForShutdown` 并异步等待 Inspection Actor 回到 `Idle`；
+  5. Camera Actor 停止后发送 `CancelCurrentForShutdown`，异步等待 `InspectionBecameIdle`；Actor 已为 `Idle` 时立即响应；
   6. 关闭 Inspection Worker 和各 Actor；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
   7. 释放原 AppState、Latest Frame Store 及其他应用资源；
   8. 将 ApplicationLifecycle 切换为 `Terminated`，完成所有附着的关机请求。
@@ -210,9 +210,9 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
 
 关机与检查完成或失败的竞争由 Inspection Actor 的串行处理顺序裁决：
 
-- Actor 先处理完成或失败输出时，任务正常结束，随后关机流程确认其为 `Idle`；
+- Actor 先处理完成或失败输出时，任务正常结束，随后关机取消请求立即响应 `InspectionBecameIdle(None)`；
 - Actor 先处理关机取消请求时，进入 `Cancelling`；之后到达的匹配 `Completed`、`Failed` 或 `Cancelled` 均证明 Worker 已停止，其中完成输出和失败错误一律丢弃；
 - 因关机取消的检查不生成正常结果、失败展示或面向 GUI 的超时结果；
-- Worker 的匹配终止输出到达后，Inspection Actor 释放任务资源、回到 `Idle`，并向关机流程确认取消完成。
+- Worker 的匹配终止输出到达后，Inspection Actor 释放任务资源、回到 `Idle`，并完成 `InspectionBecameIdle` 响应。
 
 摄像头先于检查取消停止。检查已经固定 Frame，不依赖后续采集。

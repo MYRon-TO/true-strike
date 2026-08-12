@@ -4,11 +4,13 @@
 
 ### 术语
 
-- **命令**：GUI 向 App Controller 发出的操作请求；
-- **申请**：App Controller 向 Actor 发出的操作请求；
+- **命令**：GUI 或应用运行环境向 App Controller 发出的操作请求；
+- **申请**：App Controller 向 Actor 发出的、可能被业务状态拒绝的操作请求；
+- **控制请求**：应用生命周期协调方要求组件停止或关闭的请求；
 - **任务**：Actor 向 Worker 提交的工作；
-- **输出**：Worker 返回 Actor 的执行结果；
-- **事件**：Actor 向 App Controller 发送的异步通知。
+- **输出**：Worker 返回 Actor 的任务终止结果；
+- **事件**：Actor 向 App Controller 发送的异步领域事实；
+- **投影**：组件发布的可替换最新状态。
 
 ### 规范用语
 
@@ -34,4 +36,5 @@
 - [行为规约](./core/Contract.md)：行为规约索引、基础约束和系统级不变量；
   - [用例与命令](./core/Contract/UseCases.md)：端到端用例、命令边界和错误顺序；
   - [状态机](./core/Contract/StateMachines.md)：应用生命周期、应用模式和 Actor 状态转换；
+  - [消息规约](./core/Contract/Messages.md)：异步消息、请求响应、领域事件、投影和组件控制消息；
   - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约。
