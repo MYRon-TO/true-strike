@@ -277,15 +277,3 @@ Actor Projection 和 AppViewSnapshot 是不可变最新值资源：
 10. InspectionPresentation 的领域真值只存在于当前模式状态；GUI 快照不是第二状态所有者。
 11. 过期 Worker 输出、计时器消息和领域事件不得恢复已释放资源或改变当前资源所有权。
 12. ApplicationLifecycle 只有在组件停止且应用所有者已按关机顺序释放运行期资源后才能进入 `Terminated`。
-
-## 14. 完整性检查表
-
-- [x] Camera SDK、采集缓冲区、Frame 和 Latest Frame Store 均定义创建、唯一写入者和释放边界；
-- [x] GUI 预览与 AppViewSnapshot 均采用替换式最新值语义，并定义旧引用释放边界；
-- [x] 每种 AppState 均定义所持模式资源，以及模式进入失败、返回 Home 和关机时的释放路径；
-- [x] Draft Config、配置读取中间值、保存事务资源和验证方案均定义临时持有边界；
-- [x] 生产与测试 Inspection Plan 均定义构建、共享、申请拒绝和任务终止时的释放路径；
-- [x] 每个已接受任务均定义 Actor、Worker、取消信号、计时器和关机等待者的终止路径；
-- [x] Worker 输出、领域事件及被过滤载荷均定义转移或丢弃语义；
-- [x] InspectionPresentation 明确由当前模式状态持有领域真值，并定义替换、离开模式和旧快照延寿语义；
-- [x] 优雅关机定义组件外部资源和应用运行期资源的分阶段释放顺序。
