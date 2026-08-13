@@ -98,12 +98,12 @@ AppCommand
 | 命令 | 成功响应 | 业务失败响应 |
 | --- | --- | --- |
 | `EnterEditMode` | `EnteredEditMode(mode_session_id)` | `InvalidMode`、`ConfigLoadFailed`、`ConfigInvalid` |
-| `EnterProductionMode` | `EnteredProductionMode(mode_session_id)` | `InvalidMode`、`ConfigLoadFailed`、`ConfigInvalid`、`PlanBuildFailed` |
+| `EnterProductionMode` | `EnteredProductionMode(mode_session_id)` | `InvalidMode`、`ConfigLoadFailed`、`ConfigInvalid` |
 | `ReturnHome` | `ReturnedHome` | 无 |
 | `ModifyDraft` | `DraftModified` | `InvalidMode`、`ConfigInvalid` |
 | `ValidateDraft` | `DraftValid` | `InvalidMode`、`ConfigInvalid` |
-| `SaveDraft` | `DraftSaved(scheme_id, revision)` | `InvalidMode`、`ConfigInvalid`、`PlanBuildFailed`、`ConfigSaveFailed` |
-| `StartTestInspection` | `InspectionAccepted(metadata)` | `InvalidMode`、`ConfigInvalid`、`PlanBuildFailed`、`NoFrame`、`Busy(active_metadata)` |
+| `SaveDraft` | `DraftSaved(scheme_id, revision)` | `InvalidMode`、`ConfigInvalid`、`ConfigSaveFailed` |
+| `StartTestInspection` | `InspectionAccepted(metadata)` | `InvalidMode`、`ConfigInvalid`、`NoFrame`、`Busy(active_metadata)` |
 | `StartProductionInspection` | `InspectionAccepted(metadata)` | `InvalidMode`、`NoFrame`、`Busy(active_metadata)` |
 | `Shutdown` | `ShutdownCompleted` | 无 |
 
@@ -251,10 +251,8 @@ CloseInspectionActor -> InspectionActorClosed
 ```text
 InspectionEvent
 ├── InspectionCompleted
-│   ├── metadata: InspectionMetadata
 │   └── presentation: InspectionPresentation
 ├── InspectionFailed
-│   ├── metadata: InspectionMetadata
 │   └── presentation: InspectionPresentation
 └── InspectionTimedOut
     └── metadata: InspectionMetadata
@@ -269,7 +267,7 @@ InspectionEvent
 - 因 `ReturnHome` 或 `Shutdown` 取消的任务不产生领域事件；
 - Actor 进入 `Cancelling` 后收到的匹配 `Completed` 或 `Failed` 只证明当前检查任务执行已经终止，其业务载荷被丢弃。
 
-领域事件中的 `mode_session_id` 通过 metadata 携带。事件一经构造便不再依赖 Actor 持有的任务资源。
+`InspectionCompleted` 和 `InspectionFailed` 的 `mode_session_id` 通过 `presentation.metadata` 携带；`InspectionTimedOut` 直接通过 metadata 携带。事件一经构造便不再依赖 Actor 持有的任务资源。
 
 ## 8. 领域事件过滤
 
@@ -277,7 +275,7 @@ App Controller 只有同时满足以下条件时，才允许 InspectionEvent 更
 
 1. ApplicationLifecycle 为 `Running`；
 2. AppState 为 EditMode 或 ProductionMode；
-3. 事件 metadata 的 `mode_session_id` 与当前模式一致。
+3. `InspectionCompleted` 或 `InspectionFailed` 的 `presentation.metadata.mode_session_id`，或者 `InspectionTimedOut` 的 `metadata.mode_session_id`，与当前模式一致。
 
 其他 InspectionEvent 一律丢弃。丢弃事件只释放事件载荷，不影响 Inspection Actor 已经完成的状态转换和资源释放。
 

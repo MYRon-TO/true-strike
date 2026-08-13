@@ -56,14 +56,14 @@ v1 不允许使用可解析但校验失败的配置进入 EditMode。
   4. App Controller 生成新的 `ModeSessionId`；
   5. App Controller 一次性提交 ProductionMode。
 - **成功结果**：进入 ProductionMode，并持有配置、配置路径和有效生产方案。
-- **失败结果**：AppState 不是 Home 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigLoadFailed`、`ConfigInvalid` 或 `PlanBuildFailed`，并保留 Home。
+- **失败结果**：AppState 不是 Home 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigLoadFailed` 或 `ConfigInvalid`，并保留 Home。
 - **状态转换**：Home → ProductionMode；失败时保持命令处理前的 AppState。
 - **完成边界**：ProductionMode 已提交。
 - **异步后续**：无。
-- **资源变化**：ProductionMode 取得配置和生产方案；失败时释放已读取配置、部分构建结果等临时资源。
+- **资源变化**：ProductionMode 取得配置和生产方案；业务失败时释放已读取配置等临时资源。
 - **并发关系**：处理期间不处理后续应用命令；相关命令按 App Controller 的串行顺序执行。
 
-ProductionMode 运行期间不自动重新读取配置文件。配置读取、校验或方案构建失败属于业务错误；内部不变量破坏或内部通信基础设施失效可以直接 `panic`。
+ProductionMode 运行期间不自动重新读取配置文件。配置读取或校验失败属于业务错误；完整校验成功的配置无法构建为完整 Inspection Plan 时表示内部契约被破坏，直接 `panic`。内部通信基础设施失效同样直接 `panic`。
 
 ## 4. 返回主页
 
@@ -116,7 +116,7 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
 - **资源变化**：不修改草稿、配置文件、展示对象或任何缓存。
 - **并发关系**：按 App Controller 的串行顺序读取命令处理时的当前草稿。
 
-该命令不构建 Inspection Plan。方案可构建性由保存配置或发起测试检查时验证。
+该命令不构建 Inspection Plan。保存配置和发起测试检查仍按各自用例实际构建方案。
 
 ## 7. 保存配置草稿
 
@@ -126,21 +126,23 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
 - **输入**：当前 Draft Config 和原配置文件路径。
 - **处理过程**：
   1. 校验草稿；
-  2. Scheme Manager 构建一次不可变可执行 Inspection Plan，以验证可构建性；
+  2. Scheme Manager 构建一次不可变可执行 Inspection Plan，使保存提交以实际编译成功为前提；
   3. 计算单调递增的新 `revision`；
   4. 使用新 `revision` 生成待保存配置；
   5. 写入临时文件；
   6. 原子替换原配置文件；
   7. 将内存草稿同步为已提交的新 `revision`。
 - **成功结果**：磁盘配置与内存草稿逻辑一致，并具有相同的新 `revision`；应用继续处于 EditMode。
-- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigInvalid`、`PlanBuildFailed` 或 `ConfigSaveFailed`。
+- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigInvalid` 或 `ConfigSaveFailed`。
 - **状态转换**：成功时保持 EditMode 并更新 Draft Config 的 `revision`；失败时保持命令处理前的 AppState。
 - **完成边界**：原子替换成功，且内存草稿已同步为新 `revision`。
 - **异步后续**：无。
-- **资源变化**：构建出的验证方案不进入模式状态；失败时原文件及内存草稿的 `revision` 保持不变。
+- **资源变化**：构建出的方案不进入模式状态；业务失败时原文件及内存草稿的 `revision` 保持不变。
 - **并发关系**：修改、校验、保存和测试命令按 App Controller 的串行顺序执行。
 
 `revision` 从 `1` 开始，使用 `u64` 单调递增，不循环复用；发生整数溢出时直接 `panic`。保存时覆盖路径当前指向的配置文件，不检测编辑期间发生的外部文件修改。
+
+完整校验成功的草稿无法构建为完整 Inspection Plan 时直接 `panic`，不返回业务错误。构建出的方案在保存命令结束时释放。
 
 ## 8. 发起测试检查
 
@@ -155,14 +157,14 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取、�
   4. App Controller 从 Latest Frame Store 固定最新 Frame；
   5. App Controller 向 Inspection Actor 提交检查申请。
 - **成功结果**：Inspection Actor 接受申请、进入 `Running`，并成功将任务提交给 Inspection Worker。
-- **失败结果**：AppState 不匹配时先返回 `InvalidMode`；模式匹配后，按处理顺序可能返回 `ConfigInvalid`、`PlanBuildFailed`、`NoFrame` 或 `Busy`。
+- **失败结果**：AppState 不匹配时先返回 `InvalidMode`；模式匹配后，按处理顺序可能返回 `ConfigInvalid`、`NoFrame` 或 `Busy`。
 - **状态转换**：成功时 AppState 保持 EditMode，Inspection Actor 从 `Idle` 转入 `Running`；失败时保持命令处理前的状态。
 - **完成边界**：Inspection Actor 已进入 `Running`，且 Worker 已接受任务。Worker 成功接受任务时，Inspection Actor 读取单调时间并开始计算执行超时；业务展示时间 `started_at` 在 Actor 接受申请时读取。
 - **异步后续**：发布最新检查状态；后续产生检查完成、检查失败或检查超时事件。
 - **资源变化**：临时方案只属于本次命令和对应任务，不进入 EditMode；申请被拒绝时，申请携带的 Frame 和 Inspection Plan 共享引用随申请销毁而释放。
 - **并发关系**：App Controller 开始处理命令后先校验模式；模式不匹配时不校验草稿、不构建方案、不读取帧，也不联系 Inspection Actor。模式匹配时，方案构建完成后才申请检查并判断 `Busy`。旧展示在新结果或失败展示到达前继续保留。
 
-内部任务提交失败不允许在命令成功后发生；v1 将该情况视为内部基础设施失效并直接 `panic`。
+完整校验成功的草稿无法构建为完整 Inspection Plan 时直接 `panic`。内部任务提交失败属于内部基础设施失效，同样直接 `panic`。
 
 ## 9. 发起生产检查
 

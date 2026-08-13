@@ -189,7 +189,7 @@ Scheme Manager 不持有 AppState、当前模式、编辑草稿或当前方案�
 - 校验配置；
 - 构建不可变 Inspection Plan；
 - 保存 App Controller 提供的有效草稿；
-- 返回配置与方案构建错误。
+- 返回配置读取、校验和保存业务错误；完整校验成功后的方案构建失败直接 `panic`。
 
 文件访问和持久化副作用集中在该边界内。
 
@@ -276,7 +276,7 @@ InspectionCoreOutput
 └── optional_visualization
 ```
 
-Inspection Actor 将核心输出与元数据组装为应用层检查结果。
+Inspection Actor 将核心输出、元数据和固定 Frame 组装为应用层 InspectionPresentation；InspectionResult 和 InspectionError 不重复携带元数据。
 
 ## 7. GUI
 

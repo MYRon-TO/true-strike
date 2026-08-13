@@ -171,46 +171,141 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 ## 9. 错误与结果语义
 
-### 9.1 业务错误
+### 9.1 分类与公共规则
 
-- `Busy`：Inspection Actor 收到申请时已有检查正在运行或取消中；
-- `NoFrame`：App Controller 固定检查帧时没有可用帧；
-- `InvalidMode`：应用命令与 App Controller 当前 AppState 不匹配；至少携带命令、实际模式和期望模式；
-- `ConfigLoadFailed`：配置文件读取或解析失败；
-- `ConfigInvalid`：配置结构、字段、算子或阶段引用、参数或判定规则未通过静态校验；
-- `PlanBuildFailed`：已通过完整校验的配置无法构建为完整可执行方案；
-- `ConfigSaveFailed`：配置未能按临时写入和原子替换的保存事务提交；
-- `InspectionFailed`：已构建方案中的算子或判定规则执行失败，并生成关联帧的失败展示；
-- `InspectionTimedOut`：检查因执行超时进入取消，且 Actor 在适用的取消截止消息之前处理到匹配 WorkerOutcome。
-- `ShuttingDown`：应用已开始关机，当前命令不再执行。
+v1 将错误与结果分为四类：
 
-需要为每项错误补充：
+1. **应用命令业务错误**：命令在当前业务条件下无法执行，通过命令响应返回；
+2. **检查执行错误**：Inspection Core 无法正常完成算子或判定求值，以 `InspectionError` 作为 WorkerOutcome 载荷；
+3. **检查终止事件**：Inspection Actor 对外发布的 `InspectionCompleted`、`InspectionFailed` 或 `InspectionTimedOut` 领域事实；
+4. **致命错误**：内部契约、协议、不变量或基础设施失效，直接 `panic`。
 
-- 产生组件；
-- 携带上下文；
-- 是否可展示；
-- 是否改变状态；
-- 是否允许重试。
+`Completed(Pass)` 和 `Completed(Fail)` 都是正常完成。业务判定 `Fail`、没有检测到目标等正常业务事实、没有可视化数据、协作取消以及过期消息被丢弃均不得转换为业务错误。除本文另有规定外，业务错误不改变命令处理前的状态或已提交资源，系统不进行隐式重试。
 
-### 9.2 致命错误
+### 9.2 应用命令业务错误
 
-以下错误不属于可恢复业务错误，直接 `panic`：
+概念类型为：
 
-- 任一组件初始化失败；
-- 摄像头采集或关闭失败；
+```text
+AppCommandError
+├── Busy(active_metadata)
+├── NoFrame
+├── InvalidMode(command, actual_mode, expected_mode)
+├── ConfigLoadFailed(config_path, phase, diagnostic)
+├── ConfigInvalid(location?, code, diagnostic)
+├── ConfigSaveFailed(config_path, phase, diagnostic)
+└── ShuttingDown
+```
+
+上述字段是逻辑上的最小上下文，不限定 Rust 表示。`code` 用于稳定分类，`diagnostic` 用于诊断或展示，不得要求 GUI 解析任意诊断文本决定业务行为。
+
+| 错误 | 产生边界 | 状态与资源 | 展示及再次操作 |
+| --- | --- | --- | --- |
+| `Busy` | Inspection Actor 在 `Running` 或 `Cancelling` 中拒绝申请 | 不改变 Actor 状态；释放被拒绝申请持有的引用 | 可以展示活动任务；Actor 回到 `Idle` 后可发起新申请 |
+| `NoFrame` | App Controller 从 Latest Frame Store 固定检查帧 | 不提交检查申请，不改变状态 | 可以提示暂无完整帧；有帧后可发起新命令 |
+| `InvalidMode` | App Controller 校验命令与当前 AppState | 不执行命令内容，不改变状态 | 可以提示操作已失效；进入期望模式后可发起新命令 |
+| `ConfigLoadFailed` | Scheme Manager 读取并解析配置文件 | 不形成可提交的内存配置，释放读取和解析临时资源 | 可以展示路径、阶段和诊断；修复外部条件后可重试 |
+| `ConfigInvalid` | App Controller 字段校验或 Scheme Manager 完整校验 | 不提交修改、模式或方案，释放校验临时资源 | 可以展示位置、错误码和诊断；修改配置后可重试 |
+| `ConfigSaveFailed` | Scheme Manager 保存事务 | 原文件和内存草稿的已提交 revision 保持不变 | 可以展示路径、阶段和诊断；只允许用户重新发起保存 |
+| `ShuttingDown` | App Controller 已进入 `ShuttingDown` | 不执行普通命令，不改变关机流程 | GUI 不再提供业务操作；当前进程内不可重试普通命令 |
+
+配置错误按处理阶段划分：
+
+- `ConfigLoadFailed` 表示 Scheme Manager 未能从指定文件取得完整内容并将其解析为内存 `InspectionSchemeConfig`；
+- `ConfigInvalid` 表示内存 `InspectionSchemeConfig` 已经形成，但未通过完整静态校验；
+- 完整校验成功的配置无法构建为完整 Inspection Plan 不属于业务错误，直接 `panic`。
+
+保存草稿仍必须在提交保存事务前实际构建一次完整 Inspection Plan。该方案不进入 EditMode，并在保存命令结束时释放。
+
+### 9.3 检查执行错误与正常结果
+
+Inspection Core 的终止类型为：
+
+```text
+InspectionCoreOutcome
+├── Completed(InspectionCoreOutput)
+├── Failed(InspectionError)
+└── Cancelled
+```
+
+`InspectionError` 只表示已经构建的方案在执行算子或最终判定时无法正常完成，不包含业务判定 `Fail`、配置错误、超时或取消。其分类至少为：
+
+```text
+InspectionError
+├── OperatorExecutionFailed
+│   ├── stage_id
+│   ├── operator_id
+│   ├── code
+│   └── diagnostic
+└── DecisionEvaluationFailed
+    ├── decision_rule_kind
+    ├── code
+    └── diagnostic
+```
+
+算子内部的算法库错误、输入格式不支持、派生产物计算失败或无法履行输出契约，按对应算子及 StageId 归入 `OperatorExecutionFailed`。每个具体算子必须声明稳定错误码及其上下文；错误诊断文本不得作为程序分支依据。
+
+Inspection Actor 只在 `Running` 中处理匹配的 `Completed` 时构造：
+
+```text
+InspectionResult
+├── decision: Pass | Fail
+├── measurements
+├── defects
+└── optional_visualization
+```
+
+测量、缺陷和可视化数据必须按 StageId 关联来源；多阶段数据按可执行阶段顺序稳定排列。没有可视化数据使用明确的缺省表示。InspectionResult 不携带 InspectionMetadata 或 Frame。
+
+### 9.4 检查领域事件与展示对象
+
+正常完成和执行失败共享以下唯一组合边界：
+
+```text
+InspectionPresentation
+├── metadata: InspectionMetadata
+├── frame: Shared<Frame>
+└── outcome
+    ├── Completed(InspectionResult)
+    └── Failed(InspectionError)
+```
+
+InspectionResult 和 InspectionError 不重复携带 InspectionMetadata。领域事件结构为：
+
+```text
+InspectionEvent
+├── InspectionCompleted(presentation)
+├── InspectionFailed(presentation)
+└── InspectionTimedOut(metadata)
+```
+
+终止语义：
+
+- `InspectionCompleted` 只由 `Running` 中匹配的 `Completed` 产生，包含 `Pass` 或 `Fail`；
+- `InspectionFailed` 只由 `Running` 中匹配的 `Failed` 产生，并通过 Presentation 持有关联 Frame；
+- `InspectionTimedOut` 只在执行超时首先触发 `Cancelling`、固定原因为 `Timeout`，且 Actor 在适用取消截止消息前处理到匹配 WorkerOutcome、释放任务资源并提交 `Idle` 后产生；
+- `InspectionTimedOut` 只携带 metadata，不携带 Frame 或 Presentation，也不替换最近一次 Presentation；
+- Actor 进入 `Cancelling` 后，匹配的 Completed 或 Failed 业务载荷必须丢弃，不得生成正常结果或失败展示；
+- `ReturnHome` 或 `Shutdown` 取消不产生 InspectionEvent。
+
+App Controller 按 ApplicationLifecycle、AppState 和事件中的 `mode_session_id` 过滤事件。Completed 和 Failed 从 `presentation.metadata` 取得会话标识，TimedOut 从自身 metadata 取得；不存在事件顶层 metadata 与 Presentation metadata 的重复副本。只有通过过滤的 Completed 或 Failed 才原子替换当前模式的 Presentation。
+
+检查失败、超时或取消后，v1 不恢复或重放原任务。用户只能发起一次使用命令处理时最新输入的新检查。
+
+### 9.5 致命错误
+
+以下情况不属于可恢复业务错误，直接 `panic`：
+
+- 任一组件、算子注册表或设备初始化失败；
+- 摄像头采集、SDK 缓冲区复制、Frame 构造、采集循环停止或设备关闭失败；
+- 完整校验成功的配置无法构建为完整 Inspection Plan；
+- Worker 任务提交失败，或者 Worker、Inspection Core 或算子发生未声明的 panic；
+- `Running` 中收到当前任务匹配的 `Cancelled`；
 - Actor 在匹配 WorkerOutcome 之前先处理适用的取消截止消息；
-- 组件关闭失败或内部通信基础设施失效。
+- revision 溢出、注册表描述符无效、阶段输出违反已声明契约或其他内部不变量被破坏；
+- 组件关闭协议顺序错误、组件关闭失败或内部通信基础设施失效。
 
-其他内部不变量被破坏时的处理待定义。
-
-### 9.3 检查结果
-
-需要补充：
-
-- InspectionResult 的完整字段；
-- InspectionError 的分类与上下文；
-- 成功、失败、取消和超时之间的类型关系；
-- 对 GUI 暴露的结果投影。
+致命错误不得转换为 `ConfigInvalid`、`InspectionError` 或伪造的 InspectionEvent。`panic` 是异常终止出口，不是 ApplicationLifecycle 的 `Terminated`，也不保证完成业务级回滚或优雅资源释放。
 
 ## 10. 系统级不变量
 
@@ -249,6 +344,8 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 31. 第一个触发 `Cancelling` 的原因固定，重复取消不得覆盖原因或延长取消截止时间。
 32. Camera Actor 进入 `Stopping` 后不得再发布 Frame。
 33. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
+34. 完整校验成功的配置必须构建为完整 Inspection Plan，否则直接 `panic`。
+35. InspectionCompleted 和 InspectionFailed 的 InspectionMetadata 只由其 InspectionPresentation 携带，不得在事件顶层或 InspectionResult、InspectionError 中重复。
 
 后续每增加一个命令、状态或消息，都应检查其是否保持以上不变量。
 
@@ -281,7 +378,3 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 - [ ] 每个错误都定义状态是否变化；
 - [ ] 每个共享资源都定义创建、持有、转移和释放；
 - [ ] 每个已接受任务都存在确定的资源终止路径。
-
-## 12. 待讨论事项
-
-1. 错误的具体类型结构。

@@ -54,15 +54,14 @@ DecisionRule
 
 ### 2.1 校验层级
 
-Scheme Manager 必须按以下层级校验配置，遇到首个问题时停止并返回 `ConfigInvalid`：
+Scheme Manager 只对已经完整形成的内存 `InspectionSchemeConfig` 执行校验。校验必须按以下层级进行，遇到首个问题时停止并返回 `ConfigInvalid`：
 
-1. 配置结构及字段类型有效；
-2. `scheme_id`、`revision`、`name` 和 `stages` 满足字段约束；
-3. StageId 在整份配置中唯一；
-4. 每个 OperatorId 均能在算子注册表中唯一查得；
-5. 每个阶段的参数均能按对应算子声明解析为类型化参数并通过校验；
-6. 启用阶段对其他阶段输出的引用有效；
-7. DecisionRule 结构有效、类型正确且引用有效。
+1. `scheme_id`、`revision`、`name` 和 `stages` 满足字段值约束；
+2. StageId 在整份配置中唯一；
+3. 每个 OperatorId 均能在算子注册表中唯一查得；
+4. 每个阶段的参数均能按对应算子声明解析为类型化参数并通过校验；
+5. 启用阶段对其他阶段输出的引用有效；
+6. DecisionRule 满足静态结构、类型和引用约束。
 
 `revision` 从 `1` 开始。其递增和溢出规则由保存配置草稿用例规定，普通字段修改不得绕过该规则提交 revision。
 
@@ -154,21 +153,21 @@ InspectionPlan
 
 - 只有所有可执行阶段和判定规则均构建成功后，才能发布 Inspection Plan；
 - 部分阶段、部分解析参数或部分判定结构不得作为 Inspection Plan 返回；
-- 构建失败时释放全部临时资源，不改变 AppState 或已提交方案；
-- App Controller 只接收完整方案或完整错误；
-- 方案构建失败时不得向 Inspection Actor 提交检查申请。
+- App Controller 只接收完整 Inspection Plan，不接收部分构建结果；
+- 完整校验成功的配置无法构建为完整 Inspection Plan 时，必须释放全部构建临时资源并直接 `panic`；
+- 构建未完成时不得向 Inspection Actor 提交检查申请。
 
 ### 4.2 错误边界
 
-配置相关错误按其发生边界区分：
+配置处理按操作边界分为三个阶段：
 
-- `ConfigLoadFailed`：配置文件读取或解析失败；
-- `ConfigInvalid`：配置结构、字段、算子引用、参数、阶段引用或判定规则不满足静态契约；
-- `PlanBuildFailed`：配置已通过完整校验，但类型化阶段或判定规则无法构建为完整可执行对象；
-- `ConfigSaveFailed`：保存事务中的序列化、临时文件写入或原子替换失败；
-- `InspectionFailed`：方案已经构建并开始执行后，算子或判定求值发生执行错误。
+- `ConfigLoadFailed`：Scheme Manager 未能从指定文件取得完整内容并将其解析为内存 `InspectionSchemeConfig`；
+- `ConfigInvalid`：已经形成内存 `InspectionSchemeConfig`，但未通过完整静态校验；
+- 方案构建致命错误：已经通过完整校验的配置无法构建为完整 Inspection Plan，表示校验器、算子描述符或构建器之间的内部契约被破坏，直接 `panic`。
 
-配置校验成功不产生 Inspection Plan。保存草稿和发起测试检查仍必须按各自用例执行方案构建，以验证并取得可执行对象。
+`ConfigSaveFailed` 只表示保存事务中的序列化、临时文件写入或原子替换失败。方案已经构建并开始执行后，算子或判定求值失败产生 `InspectionError`，并由 Inspection Actor 在适用条件下发布 `InspectionFailed`。
+
+配置校验成功不产生 Inspection Plan。保存草稿和发起测试检查仍必须按各自用例实际构建方案；保存草稿以实际构建成功为提交前提，构建出的方案不进入模式状态。
 
 ### 4.3 可检查性和实现边界
 
@@ -353,3 +352,4 @@ Inspection Plan 的详细资源规则以 [资源生命周期规约](./Resources.
 12. 相同 ArtifactKey 的通用派生产物在单次检查中至多成功计算一次，且不跨任务共享。
 13. Pass 和 Fail 都是正常判定结果，不得与执行失败或取消混淆。
 14. 具体算子必须满足其声明的输入、输出、错误和取消契约。
+15. 完整校验成功的配置必须构建为完整 Inspection Plan，否则直接 `panic`。

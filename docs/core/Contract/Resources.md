@@ -112,11 +112,11 @@ App Controller 是 AppState 及其模式资源的唯一领域所有者。
 
 保存草稿时：
 
-1. 为可构建性验证创建的 Inspection Plan 只属于当前保存命令，不进入 EditMode；
+1. 保存提交前构建的 Inspection Plan 只属于当前保存命令，不进入 EditMode；
 2. 临时文件在原子替换成功前属于保存事务资源；
-3. 保存失败时释放验证方案及临时资源，内存草稿和原文件保持未提交状态；
+3. 保存失败时释放构建出的方案及保存临时资源，内存草稿和原文件保持未提交状态；
 4. 原子替换成功后，内存草稿的 `revision` 在同一命令完成边界同步为已提交值；
-5. 验证方案在保存命令结束时释放，不成为生产方案。
+5. 构建出的方案在保存命令结束时释放，不成为生产方案。
 
 ## 7. Inspection Plan
 
@@ -132,7 +132,7 @@ Inspection Plan 由 Scheme Manager 从有效配置完整构建，是不可变的
 ### 7.2 测试方案
 
 - 测试方案在 `StartTestInspection` 命令中根据当前草稿临时构建；
-- 方案构建失败时不得提交检查申请；
+- 完整校验成功的草稿无法构建为完整 Inspection Plan 时，释放构建临时资源并直接 `panic`，不得提交检查申请；
 - 申请被拒绝时，申请引用释放；没有其他持有者时方案随之销毁；
 - 申请成功后，方案只由对应任务相关持有者继续持有，不进入 EditMode。
 
@@ -213,7 +213,18 @@ Inspection Core 的阶段中间值和算子临时资源只由当前 Worker 调�
 
 ## 10. InspectionPresentation
 
-InspectionPresentation 是不可变展示对象，至少持有关联检查 Frame，并包含成功的 InspectionResult，或失败的 InspectionError 及对应元数据。
+InspectionPresentation 是不可变展示对象，其结构为：
+
+```text
+InspectionPresentation
+├── metadata: InspectionMetadata
+├── frame: Shared<Frame>
+└── outcome
+    ├── Completed(InspectionResult)
+    └── Failed(InspectionError)
+```
+
+Presentation 是正常完成或执行失败的检查身份、关联 Frame 和展示载荷的唯一组合边界。InspectionResult 和 InspectionError 不重复携带 InspectionMetadata。
 
 ### 10.1 创建与转移
 
@@ -226,7 +237,7 @@ InspectionPresentation 是不可变展示对象，至少持有关联检查 Frame
 
 App Controller 当前模式的 `optional_presentation` 是最近一次检查展示的唯一领域真值：
 
-- 会话匹配的完成或失败事件使 App Controller 原子替换当前 Presentation；
+- 会话匹配的完成或失败事件使用 `presentation.metadata.mode_session_id` 过滤，并使 App Controller 原子替换当前 Presentation；
 - 替换时释放 AppState 对旧 Presentation 及关联 Frame 的共享引用；其他旧快照仍可使对象继续存活；
 - 会话不匹配、当前为 Home 或 ApplicationLifecycle 不是 `Running` 时，事件被丢弃，不改变当前 Presentation；
 - InspectionTimedOut 不替换现有 Presentation；

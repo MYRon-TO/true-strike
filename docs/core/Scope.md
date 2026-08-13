@@ -121,20 +121,19 @@ v1 目标：
 
 ## 5. v1 错误范围
 
-v1 处理以下业务错误：
+v1 处理以下应用命令业务错误：
 
 - `Busy`；
 - `NoFrame`；
 - `InvalidMode`；
 - `ConfigLoadFailed`；
 - `ConfigInvalid`；
-- `PlanBuildFailed`；
 - `ConfigSaveFailed`；
-- `InspectionFailed`；
-- `InspectionTimedOut`；
 - `ShuttingDown`。
 
-v1 不实现组件初始化、摄像头采集及组件关闭的错误恢复；这些操作失败时直接 `panic`。
+检查被接受后的正常完成、执行失败和执行超时通过异步检查事件表达。`InspectionFailed` 和 `InspectionTimedOut` 是检查终止事实，不是应用命令业务错误；业务判定 `Fail` 是正常完成结果，不是执行错误。
+
+v1 不实现组件初始化、摄像头采集、有效配置的方案构建及组件关闭的错误恢复。完整校验成功的配置无法构建为完整 Inspection Plan 时表示内部契约被破坏；以上操作失败时直接 `panic`。
 
 ## 6. v1 范围外
 
