@@ -158,11 +158,16 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 该子文档定义：
 
-- 配置有效性；
-- Scheme Manager 构建不可变可执行 Inspection Plan 的边界；
-- 方案所有权和申请被拒绝时的释放语义；
-- Inspection Plan 与内部闭包实现的边界；
-- 待细化的算子输入输出、判定规则和可视化数据。
+- 配置阶段、启用阶段、禁用阶段和空执行方案等术语；
+- StageId、阶段顺序、阶段引用和禁用阶段的校验规则；
+- 算子注册表、配置校验及方案构建的错误边界；
+- Scheme Manager 完整构建不可变 Inspection Plan 的边界；
+- DecisionRule 的 Expression、AlwaysPass 和 AlwaysFail 三种形式；
+- 基于 Bind 短路语义的不可变累计阶段输出；
+- 单次检查内通用派生产物的不可变共享缓存；
+- 算子的显式输入、副作用、错误、取消和输出公共契约；
+- 空执行方案、阶段输出和多阶段可视化数据的公共语义；
+- Inspection Plan 内部动态分派实现与跨组件契约的边界。
 
 ## 9. 错误与结果语义
 
@@ -171,11 +176,11 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 - `Busy`：Inspection Actor 收到申请时已有检查正在运行或取消中；
 - `NoFrame`：App Controller 固定检查帧时没有可用帧；
 - `InvalidMode`：应用命令与 App Controller 当前 AppState 不匹配；至少携带命令、实际模式和期望模式；
-- `ConfigLoadFailed`：配置读取或解析失败；
-- `ConfigInvalid`：配置未通过校验；
-- `PlanBuildFailed`：配置无法构建可执行方案；
-- `ConfigSaveFailed`：配置未能按保存事务提交；
-- `InspectionFailed`：Inspection Core 执行失败，并生成关联帧的失败展示；
+- `ConfigLoadFailed`：配置文件读取或解析失败；
+- `ConfigInvalid`：配置结构、字段、算子或阶段引用、参数或判定规则未通过静态校验；
+- `PlanBuildFailed`：已通过完整校验的配置无法构建为完整可执行方案；
+- `ConfigSaveFailed`：配置未能按临时写入和原子替换的保存事务提交；
+- `InspectionFailed`：已构建方案中的算子或判定规则执行失败，并生成关联帧的失败展示；
 - `InspectionTimedOut`：检查因执行超时进入取消，且 Actor 在适用的取消截止消息之前处理到匹配 WorkerOutcome。
 - `ShuttingDown`：应用已开始关机，当前命令不再执行。
 
@@ -230,15 +235,20 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 17. 检查完成与取消的竞争由 Inspection Actor 的事件处理顺序裁决。
 18. 每个被接受的检查最终必须释放 Actor 持有的 Frame 和 Inspection Plan，或因致命错误终止进程。
 19. InspectionPresentation 持有关联检查帧。
-20. 生产方案和测试任务方案都不为空，但允许阶段列表为空。
-21. `ShuttingDown` 不属于 AppState，且进入后不可恢复为 `Running`。
-22. 关机开始后不再执行后续应用命令。
-23. 优雅关机必须先停止 Camera Actor，再等待当前检查终止。
-24. ApplicationLifecycle 只有在运行组件停止且运行期资源释放后才能进入 `Terminated`。
-25. 返回 Home 使用被关闭的 `ModeSessionId` 请求取消当前属于该会话的任务；迟到的旧会话取消不得影响其他会话任务。
-26. 第一个触发 `Cancelling` 的原因固定，重复取消不得覆盖原因或延长取消截止时间。
-27. Camera Actor 进入 `Stopping` 后不得再发布 Frame。
-28. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
+20. 生产方案和测试任务方案都不使用空引用表示缺少方案；其可执行阶段列表可以为空，但判定规则始终存在。
+21. 配置中的禁用阶段必须完整校验，但不得构建、执行、产生输出或被引用。
+22. 启用阶段只能引用执行顺序中更早的启用阶段，v1 不自动重排阶段。
+23. 空执行方案必须执行已声明的判定规则，不存在隐式默认判定。
+24. 阶段输出提交后不可变；失败或取消不得提交当前阶段的部分输出。
+25. 通用派生产物缓存只属于单次检查，相同 ArtifactKey 至多成功计算一次。
+26. `ShuttingDown` 不属于 AppState，且进入后不可恢复为 `Running`。
+27. 关机开始后不再执行后续应用命令。
+28. 优雅关机必须先停止 Camera Actor，再等待当前检查终止。
+29. ApplicationLifecycle 只有在运行组件停止且运行期资源释放后才能进入 `Terminated`。
+30. 返回 Home 使用被关闭的 `ModeSessionId` 请求取消当前属于该会话的任务；迟到的旧会话取消不得影响其他会话任务。
+31. 第一个触发 `Cancelling` 的原因固定，重复取消不得覆盖原因或延长取消截止时间。
+32. Camera Actor 进入 `Stopping` 后不得再发布 Frame。
+33. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
 
 后续每增加一个命令、状态或消息，都应检查其是否保持以上不变量。
 
@@ -274,7 +284,4 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 ## 12. 待讨论事项
 
-1. 算子输入输出和阶段间数据传递模型；
-2. 判定规则及空阶段方案语义；
-3. 多阶段可视化数据的合并语义；
-4. 错误的具体类型结构。
+1. 错误的具体类型结构。

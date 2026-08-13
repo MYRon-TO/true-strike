@@ -167,6 +167,7 @@ InspectionSchemeConfig
 └── decision_rule
 
 StageConfig
+├── stage_id
 ├── operator_id
 ├── enabled
 └── parameters
