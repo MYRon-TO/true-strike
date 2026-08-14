@@ -161,6 +161,7 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 该子文档定义：
 
 - 配置阶段、启用阶段、禁用阶段和空执行方案等术语；
+- EditMode 草稿的可修改字段、`draft_version`、封闭 DraftMutation 模型及字段级校验错误码；
 - StageId、阶段顺序、阶段引用和禁用阶段的校验规则；
 - 算子注册表、配置校验及方案构建的错误边界；
 - Scheme Manager 完整构建不可变 Inspection Plan 的边界；
@@ -193,6 +194,7 @@ AppCommandError
 ├── Busy(active_metadata)
 ├── NoFrame
 ├── InvalidMode(command, actual_mode, expected_mode)
+├── DraftVersionConflict(expected, actual)
 ├── ConfigLoadFailed(config_path, phase, diagnostic)
 ├── ConfigInvalid(location?, code, diagnostic)
 ├── ConfigSaveFailed(config_path, phase, diagnostic)
@@ -206,15 +208,16 @@ AppCommandError
 | `Busy` | Inspection Actor 在 `Running` 或 `Cancelling` 中拒绝申请 | 不改变 Actor 状态；释放被拒绝申请持有的引用 | 可以展示活动任务；Actor 回到 `Idle` 后可发起新申请 |
 | `NoFrame` | App Controller 从 Latest Frame Store 固定检查帧 | 不提交检查申请，不改变状态 | 可以提示暂无完整帧；有帧后可发起新命令 |
 | `InvalidMode` | App Controller 校验命令与当前 AppState | 不执行命令内容，不改变状态 | 可以提示操作已失效；进入期望模式后可发起新命令 |
+| `DraftVersionConflict` | App Controller 在 EditMode 比较 `ModifyDraft` 的预期版本 | 不执行 mutation，不改变草稿、`draft_version` 或快照 | GUI 应刷新到 `actual` 对应或更高版本后重新构造修改 |
 | `ConfigLoadFailed` | Scheme Manager 读取并解析配置文件 | 不形成可提交的内存配置，释放读取和解析临时资源 | 可以展示路径、阶段和诊断；修复外部条件后可重试 |
-| `ConfigInvalid` | App Controller 字段校验或 Scheme Manager 完整校验 | 不提交修改、模式或方案，释放校验临时资源 | 可以展示位置、错误码和诊断；修改配置后可重试 |
-| `ConfigSaveFailed` | Scheme Manager 保存事务 | 原文件和内存草稿的已提交 revision 保持不变 | 可以展示路径、阶段和诊断；用户可以重新发起保存 |
+| `ConfigInvalid` | App Controller 执行 mutation 字段级校验，或 Scheme Manager 执行完整配置校验 | 不提交修改、模式或方案，释放校验临时资源 | 可以展示结构化位置、稳定错误码和诊断；修改配置后可重试 |
+| `ConfigSaveFailed` | Scheme Manager 保存事务 | 原文件和内存草稿的已提交 `revision` 与 `draft_version` 保持不变 | 可以展示路径、阶段和诊断；用户可以重新发起保存 |
 | `ShuttingDown` | App Controller 已进入 `ShuttingDown` | 不执行普通命令，不改变关机流程 | GUI 不再提供业务操作；当前进程内不可重试普通命令 |
 
 配置错误按处理阶段划分：
 
 - `ConfigLoadFailed` 表示 Scheme Manager 未能从指定文件取得完整内容并将其解析为内存 `InspectionSchemeConfig`；
-- `ConfigInvalid` 表示内存 `InspectionSchemeConfig` 已经形成，但未通过完整静态校验；
+- `ConfigInvalid` 表示 DraftMutation 未通过规定的字段级校验，或已经形成的完整内存 `InspectionSchemeConfig` 未通过完整静态校验；字段级与完整校验的具体边界和稳定错误码由配置、方案与算子规约定义；
 - 完整校验成功的配置无法构建为完整 Inspection Plan 不属于业务错误，直接 `panic`。
 
 保存草稿仍必须在提交保存事务前实际构建一次完整 Inspection Plan。该方案不进入 EditMode，并在保存命令结束时释放。

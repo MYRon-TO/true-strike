@@ -41,10 +41,11 @@
 6. **SI-A4-06 检查终止提交边界**：Inspection Actor 必须先构造可独立存活的终止事件所需载荷，再释放任务上下文并提交 `Idle`；关机等待响应只能在任务资源已释放且 `Idle` 已提交后完成。
 7. **SI-A4-07 Presentation 原子替换**：只有通过生命周期、模式和会话过滤的 InspectionCompleted 或 InspectionFailed 才能原子替换当前模式的 Presentation；InspectionTimedOut 不得替换 Presentation。
 8. **SI-A4-08 启动成功提交边界**：应用启动成功时，Camera Actor 必须已经进入 `Capturing`，Home 与 ApplicationLifecycle 的 `Running` 必须在同一启动成功边界提交；启动完成不得等待首帧发布。
-9. **SI-A4-09 保存提交一致性**：保存草稿只有在完整校验、方案实际构建和配置文件原子替换均成功后才能提交新的内存 `revision`；业务失败时原文件和内存草稿的已提交 revision 必须保持不变。保存成功只保证同一运行环境中的原子替换和后续读取一致，不承诺掉电或操作系统崩溃后的持久性。
+9. **SI-A4-09 保存提交一致性**：保存草稿只有在完整校验、方案实际构建和配置文件原子替换均成功后，才能原子提交新的内存 `revision` 与 `draft_version`；业务失败时原文件和两个已提交版本均必须保持不变。保存成功只保证同一运行环境中的原子替换和后续读取一致，不承诺掉电或操作系统崩溃后的持久性。
 10. **SI-A4-10 Frame 完整发布**：Camera Actor 只有在图像数据和摄像头元数据完整复制、`frame_id` 分配且不可变 Frame 构造完成后，才能将该 Frame 发布到 Latest Frame Store；部分 Frame 不得对消费者可见。
 11. **SI-A4-11 最新值替换一致性**：Latest Frame Store 和 GUI 预览替换最新 Frame 时，必须在同一逻辑提交边界建立新引用并释放自身旧引用；替换不得修改旧 Frame 或使其他持有者失效。
-12. **SI-A4-12 草稿投影提交一致性**：进入 EditMode、成功修改 Draft Config 或成功保存并更新 `revision` 时，App Controller 必须从同一提交后的完整草稿生成编辑屏幕投影，并在对应成功响应完成前提交新的 `AppViewSnapshot` 发布；失败不得发布包含未提交草稿值的快照。
+12. **SI-A4-12 草稿投影提交一致性**：进入 EditMode 时必须发布 `draft_version = 0` 的完整草稿；成功修改 Draft Config，或成功保存并更新 `revision` 时，App Controller 必须递增 `draft_version`，从同一提交后的完整草稿和版本生成编辑屏幕投影，并在对应成功响应完成前提交新的 `AppViewSnapshot`；失败不得发布包含未提交草稿值或版本的快照。
+13. **SI-A4-13 单次草稿修改原子性**：一次 `ModifyDraft` 只能应用一个 DraftMutation 变体；候选 Draft Config 与递增后的 `draft_version` 必须全有或全无地提交。版本冲突或字段级校验失败不得改变草稿、版本或草稿快照。
 
 ## 5. A5 顺序、串行化与竞争裁决
 
@@ -55,7 +56,9 @@
 5. **SI-A5-05 返回 Home 与事件竞争**：检查事件和 ReturnHome 必须按 App Controller 的实际处理顺序裁决；Home 提交后处理的旧会话事件不得恢复原模式或更新展示。
 6. **SI-A5-06 投影顺序不可作为协议依据**：领域事件、请求响应、WorkerOutcome、关闭确认与状态投影之间不得假定观察顺序；投影不得用于证明请求完成、任务终止或组件关闭。
 7. **SI-A5-07 Scheme Manager 操作顺序**：可能阻塞的 Scheme Manager 操作必须在独立执行环境中完成；App Controller 异步等待期间可以处理 InspectionEvent 和维持 GUI 状态发布，但不得开始处理后续应用命令，ReturnHome 和 Shutdown 也不得越过当前命令。
-8. **SI-A5-08 v1 编辑串行观察**：GUI 同一时间最多允许一个 `ModifyDraft` 在途。提交修改后必须禁止下一次草稿编辑；成功时必须同时观察到可靠响应和反映该已提交草稿的新编辑屏幕快照后才能继续，且不得假定响应与快照的到达顺序；失败时在收到失败响应后继续使用未改变的当前快照。
+8. **SI-A5-08 v1 编辑串行观察**：GUI 同一时间最多允许一个 `ModifyDraft` 在途，命令必须携带当前 `draft_version`。提交后必须禁止下一次草稿编辑；成功时必须同时观察到可靠响应和版本等于响应版本的编辑屏幕快照后才能继续，观察到更高版本时也视为目标提交已被观察，且不得假定响应与快照的到达顺序；失败时在收到失败响应后继续使用未改变的当前快照。
+9. **SI-A5-09 命令状态投影边界**：App Controller 开始处理前台命令时必须先发布 `Executing(command_seq, operation)`；等待期间发布的快照保持同一执行状态；命令成功或业务失败时必须先提交领域变化，再发布 `Idle`，最后完成可靠响应。排队命令不得改变当前投影，最新值通道可以跳过短暂状态。
+10. **SI-A5-10 命令状态非协议依据**：`command_status` 和 `command_seq` 只用于观察当前前台命令及区分投影世代，不得用于证明命令成功、失败或完成，也不提供取消、截止或恢复能力。
 
 ## 6. A6 资源生命周期与隔离
 

@@ -75,7 +75,7 @@ Camera 停止、Worker 关闭或 Actor 关闭的确认与对应截止以关机�
 
 ```text
 Home
-EditMode(mode_session_id, config_path, draft_config, optional_presentation)
+EditMode(mode_session_id, config_path, draft_config, draft_version, optional_presentation)
 ProductionMode(mode_session_id, config_path, loaded_config, production_plan, optional_presentation)
 ```
 
@@ -89,7 +89,7 @@ ProductionMode(mode_session_id, config_path, loaded_config, production_plan, opt
 | EditMode | 返回主页 | Home | 无 |
 | ProductionMode | 返回主页 | Home | 无 |
 
-模式进入采用状态外准备和单点提交，不增加显式过渡状态。准备期间 App Controller 保持原状态；可能阻塞的 Scheme Manager 操作在独立执行环境中进行，App Controller 异步等待，并可以处理 InspectionEvent 和维持 GUI 状态发布，但后续应用命令必须排队且不得越过当前命令。准备失败时释放临时资源并保留原状态。GUI 如需展示命令正在执行，应使用命令状态投影，不增加 AppState 过渡状态。
+模式进入采用状态外准备和单点提交，不增加显式过渡状态。准备期间 App Controller 保持原状态；可能阻塞的 Scheme Manager 操作在独立执行环境中进行，App Controller 异步等待，并可以处理 InspectionEvent 和维持 GUI 状态发布，但后续应用命令必须排队且不得越过当前命令。准备失败时释放临时资源并保留原状态。GUI 使用命令状态投影展示当前前台操作，不增加 AppState 过渡状态；该投影的类型和发布边界以消息规约为准。
 
 ### 3.1 命令与状态矩阵
 
@@ -112,7 +112,7 @@ Home 不持有文件选择结果。文件选择对话框状态、候选路径和
 
 ### 3.3 GUI 可观察状态投影
 
-GUI 不持有或长期借用 App Controller 的 `AppState`。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将自身领域状态与这些投影纯组合为不可变 `AppViewSnapshot`；GUI 通过订阅接收快照并替换其本地持有值：
+GUI 不持有或长期借用 App Controller 的 `AppState`。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将自身领域状态、当前命令状态与这些投影纯组合为不可变 `AppViewSnapshot`；GUI 通过订阅接收快照并替换其本地持有值：
 
 ```text
 AppViewSnapshot
@@ -124,6 +124,7 @@ AppViewSnapshot
 │   │   ├── mode_session_id
 │   │   ├── config_path
 │   │   ├── draft: DraftConfigSnapshot
+│   │   │   ├── draft_version: u64
 │   │   │   ├── scheme_id
 │   │   │   ├── revision
 │   │   │   ├── name
@@ -148,17 +149,19 @@ AppViewSnapshot
 
 约束：
 
-`Screen` 必须与生命周期和 AppState 一致：ApplicationLifecycle 不是 `Running` 时为 `Unavailable`；`Running` 中分别由 Home、EditMode 和 ProductionMode 投影为对应变体。`DraftConfigSnapshot` 是当前 Draft Config 的完整值投影，不得省略阶段、参数或判定规则。它不是可变领域对象；实现可以使用不可变共享引用或结构共享，但不得借用 AppState 或暴露草稿的可变别名。
+`Screen` 必须与生命周期和 AppState 一致：ApplicationLifecycle 不是 `Running` 时为 `Unavailable`；`Running` 中分别由 Home、EditMode 和 ProductionMode 投影为对应变体。`DraftConfigSnapshot` 是当前 Draft Config 和编辑会话 `draft_version` 的完整值投影，不得省略阶段、参数或判定规则。它不是可变领域对象；实现可以使用不可变共享引用或结构共享，但不得借用 AppState 或暴露草稿的可变别名。
 
 - 组件投影和 AppViewSnapshot 的组合计算本身不产生副作用；发布投影或快照是独立的边界副作用；
 - GUI 只在单次 `view` 构造期间读取其本地快照，不持有领域状态的锁或借用；
 - 快照使用替换式最新值语义，允许跳过中间版本，不得积压状态更新；
-- 一次性命令结果和提示使用事件传递，当前模式、摄像头状态和检查状态使用最新值快照；
+- 一次性命令结果和提示使用可靠响应或事件传递；当前模式、摄像头状态、检查状态和当前前台命令使用最新值快照；`command_status` 不得用于证明命令成功、失败或完成；
 - 高频预览帧不放入完整快照，GUI 按刷新节奏从 Latest Frame Store 取得不可变 Frame 的共享引用；
 - 从旧模式返回 Home 后仍在取消的任务，以及随后进入新模式时遗留任务造成的占用，应投影为 `BusyWithPreviousSession`，不得错误显示为可发起检查；
-- ApplicationLifecycle 为 `Starting`、`ShuttingDown` 或 `Terminated` 时，不提供可操作的业务模式界面。
-- 进入 EditMode、成功执行 `ModifyDraft` 或成功执行 `SaveDraft` 并更新 `revision` 后，App Controller 必须从已提交的完整 Draft Config 生成新编辑屏幕投影，并在对应成功响应完成前提交快照发布；GUI 不得假定快照与响应的到达顺序；
-- v1 的 GUI 同一时间最多允许一个 `ModifyDraft` 在途；提交后必须禁止下一次草稿编辑，成功时只有在收到可靠响应和反映该已提交草稿的新编辑屏幕快照后才能继续，失败时在收到失败响应后继续使用未改变的当前快照。
+- ApplicationLifecycle 为 `Starting`、`ShuttingDown` 或 `Terminated` 时，不提供可操作的业务模式界面，且 `command_status` 为 `Idle`；
+- 进入 EditMode 时以 `draft_version = 0` 发布完整草稿；成功执行 `ModifyDraft`，或成功执行 `SaveDraft` 并更新 `revision` 时，App Controller 必须递增 `draft_version`，从同一提交后的完整 Draft Config 生成新编辑屏幕投影，并在对应成功响应完成前提交快照发布；GUI 不得假定快照与响应的到达顺序；
+- v1 的 GUI 同一时间最多允许一个 `ModifyDraft` 在途；提交后必须禁止下一次草稿编辑，成功时只有在收到可靠响应并观察到 `draft_version` 等于响应版本的编辑屏幕快照后才能继续，观察到更高版本时也视为目标提交已被观察；失败时在收到失败响应后继续使用未改变的当前快照；
+- App Controller 开始处理前台命令时先发布 `Executing(command_seq, operation)`；命令等待期间由 InspectionEvent 触发的新快照保持相同状态；成功或业务失败时先提交命令的领域变化，再发布 `Idle`，最后完成可靠响应；排队命令不改变当前状态；
+- 最新值通道可以跳过短暂的 `Executing` 或连续命令之间的 `Idle`。`command_seq` 只区分投影世代，不是请求关联 ID；永久不返回的 Scheme Manager 操作可以使对应 `Executing` 永久保持，且该投影不提供取消或恢复能力。
 
 ## 4. Inspection Actor
 

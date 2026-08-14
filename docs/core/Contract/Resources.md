@@ -103,22 +103,22 @@ App Controller 是 AppState 及其模式资源的唯一领域所有者。
 
 ## 6. Draft Config 与配置临时资源
 
-- Draft Config 由 EditMode 唯一持有，是当前草稿的唯一权威可变状态；
-- 编辑屏幕投影携带当前 Draft Config 的完整不可变值快照，GUI 可以独立持有旧快照，但不得通过快照修改草稿；
+- Draft Config 和编辑会话 `draft_version` 由 EditMode 唯一持有，是当前草稿内容与提交版本的唯一权威可变状态；`draft_version` 不进入配置文件；
+- 编辑屏幕投影携带当前 Draft Config 和 `draft_version` 的完整不可变值快照，GUI 可以独立持有旧快照，但不得通过快照修改草稿；
 - 草稿快照可以使用不可变共享引用或结构共享实现，不要求每次深拷贝，但不得借用 EditMode 内部状态，也不得与可变 Draft Config 形成可变别名；
-- 修改草稿采用先校验、后提交，失败的字段修改不得改变现有草稿；
-- 进入 EditMode、成功修改草稿或成功保存并更新 `revision` 后，App Controller 必须根据已提交 Draft Config 生成并发布新的编辑屏幕投影；
+- 修改草稿采用候选值先校验、单个 DraftMutation 后提交；成功时 Draft Config 与递增后的 `draft_version` 全有或全无地提交，失败不得改变二者；
+- 进入 EditMode 时发布 `draft_version = 0` 的草稿快照；成功修改草稿，或成功保存并更新 `revision` 时，App Controller 必须递增 `draft_version`，并根据同一提交后的 Draft Config 和版本生成新的编辑屏幕投影；
 - 修改、校验和测试检查不写配置文件，也不创建或修改生产方案；
 - 测试检查的方案构建输入来自命令处理边界上的当前草稿快照；后续草稿修改不影响已接受任务；
-- 返回 Home 或关机资源释放时，EditMode 释放 Draft Config；已经发布且仍被 GUI 持有的不可变草稿快照可以独立存活，直至对应 `AppViewSnapshot` 引用被替换或释放；
+- 返回 Home 或关机资源释放时，EditMode 释放 Draft Config 和 `draft_version`；已经发布且仍被 GUI 持有的不可变草稿快照可以独立存活，直至对应 `AppViewSnapshot` 引用被替换或释放；
 - 配置读取结果、解析中间值、部分构建结果和待保存配置均为同步操作的临时资源，失败时不得进入 AppState。
 
 保存草稿时：
 
 1. 保存提交前构建的 Inspection Plan 只属于当前保存命令，不进入 EditMode；
 2. 临时文件在原子替换成功前属于保存事务资源；
-3. 保存失败时释放构建出的方案及保存临时资源，内存草稿和原文件保持未提交状态；
-4. 原子替换成功后，内存草稿的 `revision` 在同一命令完成边界同步为已提交值；
+3. 保存失败时释放构建出的方案及保存临时资源，内存草稿、`draft_version` 和原文件保持未提交状态；
+4. 原子替换成功后，内存草稿的 `revision` 和编辑会话 `draft_version` 在同一命令完成边界同步为已提交值；
 5. 构建出的方案在保存命令结束时释放，不成为生产方案。
 
 保存成功只保证同一运行环境中原子替换后的文件对后续读取可见；v1 不承诺掉电或操作系统崩溃后的持久性，不要求额外执行文件或目录同步。
@@ -256,13 +256,14 @@ App Controller 当前模式的 `optional_presentation` 是最近一次检查展�
 Actor Projection 和 AppViewSnapshot 是不可变最新值资源：
 
 - Actor Projection 不得持有任务 Frame、Inspection Plan、CancellationSignal、计时器或响应句柄；
-- App Controller 将领域状态和组件投影纯组合为 AppViewSnapshot；组合过程不产生副作用；
-- AppViewSnapshot 不得借用 AppState，可以持有独立值或不可变共享引用；编辑屏幕中的 DraftConfigSnapshot 必须是完整草稿值投影；
+- App Controller 将领域状态、当前命令状态和组件投影纯组合为 AppViewSnapshot；组合过程不产生副作用；
+- AppViewSnapshot 不得借用 AppState，可以持有独立值或不可变共享引用；编辑屏幕中的 DraftConfigSnapshot 必须是包含 `draft_version` 的完整草稿值投影；
 - App Controller 的发布边界只保留最新快照，被替换或被跳过的快照释放其引用；
 - GUI 收到快照后以替换方式更新本地值，不积压快照历史；
 - GUI 只在单次 `view` 构造中借用本地快照；
 - GUI 持有旧快照可以延长 DraftConfigSnapshot、InspectionPresentation 和其关联 Frame 的物理生命周期，但不得延长旧草稿、旧模式或旧会话的逻辑有效期；
 - 一次性命令响应不进入可跳过的快照，高频预览 Frame 也不进入完整快照；
+- `command_status` 是不持有命令响应句柄、Scheme Manager 临时资源或检查申请资源的纯值投影；`command_seq` 只标识投影世代；
 - 发布方关闭和 GUI 退出时，各自释放持有的最新快照。
 
 ## 12. 组件资源与关机释放顺序

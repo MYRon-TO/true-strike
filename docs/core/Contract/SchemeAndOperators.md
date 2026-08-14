@@ -50,6 +50,81 @@ DecisionRule
 
 配置数组顺序定义启用阶段的执行顺序。v1 不根据阶段引用自动重排阶段。
 
+### 1.1 草稿字段权限与版本
+
+EditMode 中只有 `name`、`stages` 和 `decision_rule` 可以通过 `ModifyDraft` 修改。`scheme_id` 和 `revision` 是只读字段：`scheme_id` 在整个编辑会话中保持不变；`revision` 只能由成功的 `SaveDraft` 按保存用例递增。v1 不支持克隆方案、另存为或改变方案身份。
+
+EditMode 另外持有不写入配置文件的 `draft_version: u64`。进入 EditMode 时其值为 `0`；每次成功提交 `ModifyDraft`，以及每次成功执行 `SaveDraft` 并更新 `revision` 后递增一次。业务失败不得改变该值；发生溢出时直接 `panic`。`draft_version` 只标识当前编辑会话内的草稿提交，不替代持久化 `revision`。
+
+`name` 必须包含 1 至 128 个 Unicode 标量值，不得包含 Unicode 控制字符，且首尾不得为空白字符；系统不得隐式裁剪或规范化名称。SchemeId 和 StageId 的词法有效性由对应标识类型的构造契约定义。
+
+### 1.2 DraftMutation
+
+`ModifyDraft` 使用封闭的强类型修改模型：
+
+```text
+DraftMutation
+├── SetName(name)
+├── InsertStage
+│   ├── before_stage_id: Optional<StageId>
+│   └── stage: StageConfig
+├── RemoveStage(stage_id)
+├── MoveStage
+│   ├── stage_id
+│   └── before_stage_id: Optional<StageId>
+├── SetStageEnabled
+│   ├── stage_id
+│   └── enabled
+├── ReplaceStageDefinition
+│   ├── stage_id
+│   ├── operator_id
+│   └── parameters
+├── ReplaceStageParameters
+│   ├── stage_id
+│   └── parameters
+└── SetDecisionRule(decision_rule)
+```
+
+`before_stage_id = None` 表示追加到阶段列表末尾。插入阶段的 StageId 由命令调用方提供；App Controller 必须校验其有效性和在当前草稿中的唯一性。移动、启用状态修改、算子替换和参数替换均不得改变目标 StageId。算子类型和参数可以通过 `ReplaceStageDefinition` 原子地一起替换；参数单独修改使用 `ReplaceStageParameters`，v1 不提供任意字符串字段路径、通用 JSON Patch、mutation 数组或整表 `ReplaceAllStages`。
+
+一次 `ModifyDraft` 只能携带一个 DraftMutation 变体。App Controller 必须先基于当前草稿形成候选值并完成该变体规定的字段级校验，再全有或全无地提交 Draft Config 和新的 `draft_version`。失败时必须丢弃候选值，不得改变草稿、`draft_version` 或草稿快照。
+
+### 1.3 字段级校验
+
+字段级校验保证 mutation 可以明确定位目标、新值自身合法且修改后的草稿仍可完整表示；它不保证整份草稿能够通过完整配置校验或构建 Inspection Plan。
+
+| Mutation | 必须执行的字段级校验 | 延迟到完整配置校验的事项 |
+| --- | --- | --- |
+| `SetName` | 名称满足第 1.1 节约束 | 无跨字段事项 |
+| `InsertStage` | 插入锚点存在；StageId 有效且唯一；OperatorId 已注册；参数符合该算子的参数模式 | 阶段引用、执行顺序和判定规则引用 |
+| `RemoveStage` | 目标阶段存在 | 其他阶段或判定规则是否仍引用该阶段 |
+| `MoveStage` | 目标和锚点存在，且锚点不是目标自身 | 移动后的阶段引用顺序 |
+| `SetStageEnabled` | 目标阶段存在 | 启用状态变化造成的跨阶段引用有效性 |
+| `ReplaceStageDefinition` | 目标存在；新 OperatorId 已注册；参数符合新算子的参数模式 | 后续阶段和判定规则的输出引用兼容性 |
+| `ReplaceStageParameters` | 目标存在；参数符合当前算子的参数模式 | 参数中跨阶段引用的存在性、顺序和类型 |
+| `SetDecisionRule` | 规则变体、表达式结构及不依赖阶段环境的内部类型关系合法 | 被引用阶段的存在性、启用状态和输出类型 |
+
+因此，字段修改成功后草稿可以暂时包含悬空引用、对禁用阶段的引用、前向引用或输出类型不匹配。`ValidateDraft`、`SaveDraft` 和 `StartTestInspection` 必须通过完整配置校验发现这些问题。禁用阶段在字段级修改中仍执行与启用阶段相同的 StageId、OperatorId 和参数自身校验。
+
+字段级校验失败统一返回 `ConfigInvalid(location, code, diagnostic)`。`location` 必须是结构化位置，例如 `name`、`stages[stage_id=<id>]`、`stages[stage_id=<id>].parameters.threshold` 或 `decision_rule`；GUI 不得解析 `diagnostic` 决定程序行为。稳定错误码至少包括：
+
+```text
+name.empty
+name.too_long
+name.invalid_character
+stage.not_found
+stage.anchor_not_found
+stage.invalid_id
+stage.duplicate_id
+stage.self_anchor
+operator.unknown
+parameters.invalid
+decision_rule.invalid_structure
+decision_rule.invalid_expression
+```
+
+具体算子的参数错误码必须位于 `operator.<operator_id>.parameter.<code>` 命名空间。完整配置校验的跨字段错误码至少包括 `reference.stage_not_found`、`reference.stage_disabled`、`reference.forward_reference`、`reference.output_type_mismatch` 和 `decision_rule.reference_invalid`。错误码是稳定分类，诊断文本只用于展示和诊断。
+
 ## 2. 配置有效性
 
 ### 2.1 校验层级

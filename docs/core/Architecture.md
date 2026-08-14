@@ -75,6 +75,7 @@ EditMode
 ├── mode_session_id: ModeSessionId
 ├── config_path
 ├── draft_config
+├── draft_version: u64
 └── optional_presentation
 
 ProductionMode
@@ -96,6 +97,8 @@ App Controller 的职责：
 - 串行执行模式转换并维护模式资源；
 - 创建和管理 `ModeSessionId`；
 - 调用 Scheme Manager 完成配置操作；
+- 校验并原子提交单个 DraftMutation，维护编辑会话 `draft_version`；
+- 维护并发布当前前台命令的 `command_status` 纯值投影；
 - 从 Latest Frame Store 固定检查使用的帧；
 - 向 Inspection Actor 提交已经完成模式级准备的检查请求；
 - 接收检查事件，将领域状态纯投影为不可变的 GUI 最新值快照；
@@ -294,7 +297,7 @@ GUI 不直接转换 AppState，不直接访问 Camera Actor 或 Inspection Actor
 
 GUI 按自身刷新节奏读取最新帧，允许跳帧且不维护待显示帧队列。
 
-GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将其与自身领域状态纯组合为不可变 `AppViewSnapshot`；GUI 订阅快照并替换本地持有值，允许跳过中间版本。`screen` 是当前业务模式的完整只读屏幕投影；编辑屏幕携带 Draft Config 的完整不可变快照，GUI 不直接读取或持有可变草稿。一次性命令结果使用事件传递，预览帧不进入完整快照。旧模式任务尚未终止时，当前模式的检查状态投影为 `BusyWithPreviousSession`。草稿快照可以使用不可变共享引用或结构共享实现，但不得借用 AppState，也不得与 App Controller 中的可变草稿形成可变别名。
+GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将其与自身领域状态纯组合为不可变 `AppViewSnapshot`；GUI 订阅快照并替换本地持有值，允许跳过中间版本。`screen` 是当前业务模式的完整只读屏幕投影；编辑屏幕携带包含 `draft_version` 的 Draft Config 完整不可变快照，GUI 不直接读取或持有可变草稿。`command_status` 粗粒度展示当前前台命令，但不替代可靠命令响应。一次性命令结果使用可靠响应传递，预览帧不进入完整快照。旧模式任务尚未终止时，当前模式的检查状态投影为 `BusyWithPreviousSession`。草稿快照可以使用不可变共享引用或结构共享实现，但不得借用 AppState，也不得与 App Controller 中的可变草稿形成可变别名。
 
 ## 8. 依赖与所有权约束
 

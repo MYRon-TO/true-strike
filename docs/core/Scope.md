@@ -79,9 +79,9 @@ v1 目标：
 
 编辑模式不执行生产检查，测试结果必须标记为测试结果。
 
-GUI 通过 `AppViewSnapshot.screen` 中的编辑屏幕投影取得完整 Draft Config 只读快照，包括方案标识、修订号、名称、阶段列表、阶段参数和判定规则。GUI 不直接读取或持有可变 Draft Config。
+GUI 通过 `AppViewSnapshot.screen` 中的编辑屏幕投影取得完整 Draft Config 只读快照，包括编辑会话 `draft_version`、方案标识、修订号、名称、阶段列表、阶段参数和判定规则。GUI 不直接读取或持有可变 Draft Config。`scheme_id` 和 `revision` 不允许通过普通草稿修改命令改变。
 
-v1 的 GUI 同一时间最多允许一个 `ModifyDraft` 命令在途。提交修改后，GUI 必须禁止下一次草稿编辑；修改成功时，只有在收到可靠的 `DraftModified` 响应，并收到提交该命令后发布且反映已提交草稿的新编辑屏幕快照后，才能允许下一次编辑。修改失败时，GUI 在收到失败响应后基于未改变的当前快照恢复编辑。
+v1 的 GUI 同一时间最多允许一个 `ModifyDraft` 命令在途。命令必须携带当前快照的 `draft_version`；提交后 GUI 必须禁止下一次草稿编辑。修改成功时，只有在收到可靠的 `DraftModified(draft_version)` 响应并观察到相同或更高版本的新编辑屏幕快照后，才能允许下一次编辑。修改失败时，GUI 在收到失败响应后基于未改变的当前快照恢复编辑。
 
 ### 3.6 生产模式
 
@@ -132,6 +132,7 @@ v1 处理以下应用命令业务错误：
 - `Busy`；
 - `NoFrame`；
 - `InvalidMode`；
+- `DraftVersionConflict`；
 - `ConfigLoadFailed`；
 - `ConfigInvalid`；
 - `ConfigSaveFailed`；

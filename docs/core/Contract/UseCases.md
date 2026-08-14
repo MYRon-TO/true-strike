@@ -6,6 +6,8 @@ App Controller 按命令接收顺序串行处理应用命令。可能阻塞的 S
 
 除重复关机请求外，ApplicationLifecycle 不是 `Running` 时，应用命令按生命周期规则拒绝。ApplicationLifecycle 为 `Running`、但命令与当前 AppState 不匹配时，统一返回携带命令、实际模式和期望模式的 `InvalidMode`；Home 中的返回主页命令除外，它幂等成功。状态不匹配时不执行命令内容。ApplicationLifecycle 为 `ShuttingDown` 时，重复关机请求附着到当前关机流程。
 
+ApplicationLifecycle 为 `Running` 时，App Controller 开始和结束前台命令必须按消息规约发布 `Executing(command_seq, operation)` 和 `Idle`。该投影只用于 GUI 展示，不改变命令串行顺序，也不替代可靠命令响应。
+
 ## 1. 启动应用
 
 - **触发方**：应用运行环境。
@@ -30,12 +32,12 @@ App Controller 按命令接收顺序串行处理应用命令。可能阻塞的 S
 - **处理过程**：
   1. Scheme Manager 读取并解析配置文件；
   2. Scheme Manager 校验配置；
-  3. App Controller 根据有效配置创建 Draft Config；
+  3. App Controller 根据有效配置创建 Draft Config，并将编辑会话 `draft_version` 初始化为 `0`；
   4. App Controller 生成新的 `ModeSessionId`；
   5. App Controller 一次性提交 EditMode；
-  6. App Controller 根据已提交的完整 Draft Config 生成并提交编辑屏幕快照发布；
-  7. 返回 `EnteredEditMode(mode_session_id)`。
-- **成功结果**：进入 EditMode，并持有配置路径和 Draft Config；完整草稿通过编辑屏幕快照对 GUI 可观察。
+  6. App Controller 根据已提交的完整 Draft Config 和 `draft_version = 0` 生成并提交编辑屏幕快照发布；
+  7. 按命令状态终止边界发布 `Idle`，返回 `EnteredEditMode(mode_session_id)`。
+- **成功结果**：进入 EditMode，并持有配置路径、Draft Config 和 `draft_version = 0`；完整草稿及其版本通过编辑屏幕快照对 GUI 可观察。
 - **失败结果**：AppState 不是 Home 时返回 `InvalidMode`；否则返回 `ConfigLoadFailed` 或 `ConfigInvalid`，并保留 Home。
 - **状态转换**：Home → EditMode；失败时保持命令处理前的 AppState。
 - **完成边界**：EditMode 和对应编辑屏幕快照发布已经依次提交，成功响应随后完成。
@@ -91,21 +93,24 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取或�
 - **触发方**：GUI。
 - **接收方**：App Controller。
 - **前置状态**：EditMode。
-- **输入**：一个结构化字段修改操作。
+- **输入**：`expected_draft_version` 和一个 DraftMutation 变体。具体变体与字段权限见配置、方案与算子规约。
 - **处理过程**：
-  1. 对目标字段执行字段级校验；
-  2. 校验成功后，将修改原子地应用到 Draft Config；
-  3. 根据已提交的完整 Draft Config 生成并提交新的编辑屏幕快照发布；
-  4. 返回 `DraftModified`。
-- **成功结果**：内存草稿和新编辑屏幕快照均包含新字段值。
-- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；否则返回字段校验失败原因，原草稿保持不变，且不发布包含失败修改的快照。
-- **状态转换**：成功时保持 EditMode，仅更新其 Draft Config；失败时保持命令处理前的 AppState。
-- **完成边界**：修改后的 Draft Config 和对应编辑屏幕快照发布已经依次提交，`DraftModified` 随后完成。
+  1. 确认当前 AppState 为 EditMode；
+  2. 比较 `expected_draft_version` 与当前 `draft_version`；不一致时停止；
+  3. 基于当前草稿形成只包含该 mutation 的候选值；
+  4. 按 mutation 类型执行字段级校验；
+  5. 校验成功后，将候选 Draft Config 和递增后的 `draft_version` 原子地提交；
+  6. 根据同一提交后的完整草稿和版本生成并提交新的编辑屏幕快照；
+  7. 按命令状态终止边界发布 `Idle`，返回 `DraftModified(draft_version)`。
+- **成功结果**：内存草稿和新编辑屏幕快照均包含新字段值及相同的新 `draft_version`。
+- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；版本不一致时返回 `DraftVersionConflict(expected, actual)`；否则返回字段级 `ConfigInvalid`。失败时原草稿和 `draft_version` 保持不变，不发布包含失败修改的草稿快照。
+- **状态转换**：成功时保持 EditMode，原子更新其 Draft Config 和 `draft_version`；失败时保持命令处理前的 AppState。
+- **完成边界**：修改后的 Draft Config、`draft_version`、对应编辑屏幕快照和 `Idle` 已经依次提交，`DraftModified(draft_version)` 随后完成。
 - **异步后续**：GUI 对快照与响应的观察顺序不确定；最新值通道可以跳过中间快照。
-- **资源变化**：不修改配置文件，不创建或修改生产方案，也不清除现有展示对象；新快照持有完整草稿的不可变值投影。
-- **并发关系**：修改、校验、保存和测试命令按 App Controller 的串行顺序执行；单次修改不可被其他命令或事件打断。v1 GUI 同一时间最多允许一个 `ModifyDraft` 在途，提交后禁止下一次草稿编辑，直至可靠响应和反映已提交修改的新编辑屏幕快照均已观察到；失败时收到失败响应即可基于未改变的当前快照恢复编辑。
+- **资源变化**：不修改配置文件，不创建或修改生产方案，也不清除现有展示对象；新快照持有完整草稿和版本的不可变值投影。
+- **并发关系**：修改、校验、保存和测试命令按 App Controller 的串行顺序执行；单次修改不可被其他命令或事件打断。v1 GUI 同一时间最多允许一个 `ModifyDraft` 在途；成功时须收到可靠响应并观察到 `draft_version` 等于响应版本的快照后才能发起下一次草稿编辑，已经观察到更高版本时也视为目标提交已被观察；失败时收到失败响应即可基于未改变的当前快照恢复编辑。
 
-字段级校验只保证该字段修改合法，不替代完整配置校验。
+字段级校验允许草稿暂时存在跨阶段引用错误，不替代完整配置校验；每种 mutation 的输入、校验范围、稳定错误码和原子边界由配置、方案与算子规约定义。
 
 ## 6. 校验配置草稿
 
@@ -133,22 +138,22 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取或�
 - **处理过程**：
   1. 校验草稿；
   2. Scheme Manager 构建一次不可变可执行 Inspection Plan，使保存提交以实际编译成功为前提；
-  3. 计算单调递增的新 `revision`；
+  3. 计算单调递增的新 `revision` 和新 `draft_version`；
   4. 使用新 `revision` 生成待保存配置；
   5. 写入临时文件；
   6. 原子替换原配置文件；
-  7. 将内存草稿同步为已提交的新 `revision`；
-  8. 根据已提交的完整 Draft Config 生成并提交新的编辑屏幕快照发布；
-  9. 返回 `DraftSaved(scheme_id, revision)`。
-- **成功结果**：磁盘配置、内存草稿和新编辑屏幕快照逻辑一致，并具有相同的新 `revision`；应用继续处于 EditMode。
-- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigInvalid` 或 `ConfigSaveFailed`，且不发布包含未提交 `revision` 的快照。
-- **状态转换**：成功时保持 EditMode 并更新 Draft Config 的 `revision`；失败时保持命令处理前的 AppState。
-- **完成边界**：原子替换、内存草稿 `revision` 更新和对应编辑屏幕快照发布已经依次提交，成功响应随后完成。
+  7. 将内存草稿的 `revision` 和编辑会话 `draft_version` 原子地同步为新值；
+  8. 根据同一提交后的完整 Draft Config 和 `draft_version` 生成并提交新的编辑屏幕快照；
+  9. 按命令状态终止边界发布 `Idle`，返回 `DraftSaved(scheme_id, revision, draft_version)`。
+- **成功结果**：磁盘配置、内存草稿和新编辑屏幕快照逻辑一致并具有相同的新 `revision`；内存草稿和快照具有相同的新 `draft_version`；应用继续处于 EditMode。
+- **失败结果**：AppState 不是 EditMode 时返回 `InvalidMode`；否则按处理阶段返回 `ConfigInvalid` 或 `ConfigSaveFailed`，且不发布包含未提交 `revision` 或 `draft_version` 的快照。
+- **状态转换**：成功时保持 EditMode，并原子更新 Draft Config 的 `revision` 与 `draft_version`；失败时保持命令处理前的 AppState。
+- **完成边界**：原子替换、内存草稿 `revision` 与 `draft_version` 更新、对应编辑屏幕快照和 `Idle` 已经依次提交，成功响应随后完成。
 - **异步后续**：GUI 对快照与响应的观察顺序不确定。
-- **资源变化**：构建出的方案不进入模式状态；新快照持有完整草稿的不可变值投影；业务失败时原文件及内存草稿的 `revision` 保持不变。
+- **资源变化**：构建出的方案不进入模式状态；新快照持有完整草稿和版本的不可变值投影；业务失败时原文件及内存草稿的 `revision` 和 `draft_version` 保持不变。
 - **并发关系**：修改、校验、保存和测试命令按 App Controller 的串行顺序执行。
 
-`revision` 从 `1` 开始，使用 `u64` 单调递增，不循环复用；发生整数溢出时直接 `panic`。保存时覆盖路径当前指向的配置文件，不检测编辑期间发生的外部文件修改。
+`revision` 从 `1` 开始，使用 `u64` 单调递增，不循环复用；编辑会话 `draft_version` 的规则见配置、方案与算子规约。App Controller 必须在产生保存副作用前计算并确认两个新值均不溢出，发生溢出时直接 `panic`。保存时覆盖路径当前指向的配置文件，不检测编辑期间发生的外部文件修改。
 
 完整校验成功的草稿无法构建为完整 Inspection Plan 时直接 `panic`，不返回业务错误。构建出的方案在保存命令结束时释放。
 

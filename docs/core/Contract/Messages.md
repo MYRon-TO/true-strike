@@ -82,7 +82,7 @@ AppCommand
 ├── EnterEditMode(config_path)
 ├── EnterProductionMode(config_path)
 ├── ReturnHome
-├── ModifyDraft(mutation)
+├── ModifyDraft(expected_draft_version, mutation)
 ├── ValidateDraft
 ├── SaveDraft
 ├── StartTestInspection
@@ -90,7 +90,7 @@ AppCommand
 └── Shutdown
 ```
 
-`mutation` 是用例规约定义的结构化字段修改操作。文件选择对话框及候选路径属于 GUI 本地状态，不是 AppCommand。
+`mutation` 是 [配置、方案与算子规约](./SchemeAndOperators.md#12-draftmutation) 定义的单个 `DraftMutation`；`expected_draft_version` 是 GUI 构造命令所依据的编辑会话草稿版本。文件选择对话框及候选路径属于 GUI 本地状态，不是 AppCommand。
 
 除 `Shutdown` 外，上述命令的发送方是 GUI；`Shutdown` 的发送方是 GUI 或应用运行环境。接收方均为 App Controller，每条命令都携带第 1.2 节定义的一次性响应句柄。
 
@@ -101,9 +101,9 @@ AppCommand
 | `EnterEditMode` | `EnteredEditMode(mode_session_id)` | `InvalidMode`、`ConfigLoadFailed`、`ConfigInvalid` |
 | `EnterProductionMode` | `EnteredProductionMode(mode_session_id)` | `InvalidMode`、`ConfigLoadFailed`、`ConfigInvalid` |
 | `ReturnHome` | `ReturnedHome` | 无 |
-| `ModifyDraft` | `DraftModified` | `InvalidMode`、`ConfigInvalid` |
+| `ModifyDraft` | `DraftModified(draft_version)` | `InvalidMode`、`DraftVersionConflict(expected, actual)`、`ConfigInvalid` |
 | `ValidateDraft` | `DraftValid` | `InvalidMode`、`ConfigInvalid` |
-| `SaveDraft` | `DraftSaved(scheme_id, revision)` | `InvalidMode`、`ConfigInvalid`、`ConfigSaveFailed` |
+| `SaveDraft` | `DraftSaved(scheme_id, revision, draft_version)` | `InvalidMode`、`ConfigInvalid`、`ConfigSaveFailed` |
 | `StartTestInspection` | `InspectionAccepted(metadata)` | `InvalidMode`、`ConfigInvalid`、`NoFrame`、`Busy(active_metadata)` |
 | `StartProductionInspection` | `InspectionAccepted(metadata)` | `InvalidMode`、`NoFrame`、`Busy(active_metadata)` |
 | `Shutdown` | `ShutdownCompleted` | 无 |
@@ -111,6 +111,8 @@ AppCommand
 除 `Shutdown` 外，ApplicationLifecycle 不是 `Running` 时先按生命周期规则处理；进入 `ShuttingDown` 后统一返回 `ShuttingDown`，不执行命令内容。首次 `Shutdown` 异步启动唯一关机流程，重复请求附着等待同一个 `ShutdownCompleted`。
 
 `InspectionAccepted` 中的 metadata 可用于命令结果展示和诊断，但 App Controller 不以其中的 `inspection_id` 缓存 Inspection Actor 的运行状态，也不使用它发起返回 Home 取消。
+
+`DraftVersionConflict` 表示命令依据的草稿版本已经过期，不属于配置内容错误；App Controller 不执行 mutation，也不改变草稿、`draft_version` 或快照。`DraftModified` 和 `DraftSaved` 返回的 `draft_version` 标识各自已经提交的草稿版本。
 
 ## 4. 检查申请
 
@@ -326,6 +328,7 @@ AppViewSnapshot
 │   │   ├── mode_session_id: ModeSessionId
 │   │   ├── config_path
 │   │   ├── draft: DraftConfigSnapshot
+│   │   │   ├── draft_version: u64
 │   │   │   ├── scheme_id: SchemeId
 │   │   │   ├── revision: u64
 │   │   │   ├── name
@@ -344,13 +347,41 @@ AppViewSnapshot
 └── command_status
 ```
 
-App Controller 将 AppState、ApplicationLifecycle 和组件投影纯组合为不可变 AppViewSnapshot，以替换式最新值语义发布给 GUI。发送方是 App Controller，接收方是 GUI；GUI 可以跳过中间快照。ApplicationLifecycle 不是 `Running` 时，`screen` 必须为 `Unavailable`；`Running` 中的 `screen` 必须与当前 AppState 对应。
+`command_status` 的完整类型为：
 
-`DraftConfigSnapshot` 是 EditMode 当前 Draft Config 的完整只读值投影，包含完整 `StageConfig` 及其参数和判定规则。它不得借用 AppState，也不得提供修改 App Controller 所持草稿的能力；实现可以使用不可变共享引用或结构共享。
+```text
+CommandStatus
+├── Idle
+└── Executing
+    ├── command_seq: u64
+    └── operation: ForegroundOperation
 
-进入 EditMode、`ModifyDraft` 成功或 `SaveDraft` 成功并更新 `revision` 时，App Controller 必须先根据已提交草稿生成并提交新的 AppViewSnapshot 发布，再完成对应成功响应。最新值通道可以合并中间快照，且响应通道与快照通道不保证 GUI 的观察顺序。
+ForegroundOperation
+├── EnteringEditMode
+├── EnteringProductionMode
+├── ReturningHome
+├── ModifyingDraft
+├── ValidatingDraft
+├── SavingDraft
+├── StartingTestInspection
+└── StartingProductionInspection
+```
 
-一次性命令响应不得放入可跳过的快照；高频预览 Frame 也不进入快照，GUI 按刷新节奏从 Latest Frame Store 读取。v1 的 GUI 在一个 `ModifyDraft` 完成可靠响应和新草稿快照的双重观察前，不得发起下一次草稿编辑。
+`command_seq` 由 App Controller 在开始处理一个前台命令时生成，在同一应用运行期间单调递增且不得复用；溢出时直接 `panic`。它只标识命令状态投影的世代，不是请求关联标识，也不替代一次性响应句柄。`Shutdown` 由 ApplicationLifecycle 的 `ShuttingDown` 和 `Terminated` 表达，不进入 ForegroundOperation；ApplicationLifecycle 不是 `Running` 时 `command_status` 必须为 `Idle`。
+
+App Controller 在 ApplicationLifecycle 为 `Running` 时开始处理一个前台命令后，必须先提交并发布对应 `Executing`，再执行可能等待的 Scheme Manager 调用、帧读取或检查申请。立即产生 `InvalidMode` 或其他业务结果的命令也遵守该边界，但最新值通道可以跳过短暂的 `Executing`。命令等待期间处理 InspectionEvent 或发布其他状态变化时，新快照必须继续携带同一 `Executing(command_seq, operation)`；排队而尚未开始处理的命令不得改变 `command_status`。
+
+命令成功或业务失败时，App Controller 必须先提交该命令规定的领域状态、资源和草稿快照变化，再提交并发布 `Idle`，最后完成可靠命令响应。连续命令之间的 `Idle` 快照可以被最新值通道合并，因此 GUI 可以直接观察到两个不同 `command_seq` 的 `Executing`。`command_status` 只用于展示当前前台命令，不证明命令成功、失败或完成；GUI 必须以可靠命令响应作为完成依据。
+
+v1 不为 Scheme Manager 操作提供进度回报，因此 ForegroundOperation 只表达粗粒度业务操作，不得根据耗时推断读取、解析、构建或写入等内部阶段。该投影不提供取消、截止或恢复能力；操作永久不返回时，对应 `Executing` 可以永久保持。
+
+App Controller 将 AppState、ApplicationLifecycle、当前命令状态和组件投影纯组合为不可变 AppViewSnapshot，以替换式最新值语义发布给 GUI。发送方是 App Controller，接收方是 GUI；GUI 可以跳过中间快照。ApplicationLifecycle 不是 `Running` 时，`screen` 必须为 `Unavailable`；`Running` 中的 `screen` 必须与当前 AppState 对应。
+
+`DraftConfigSnapshot` 是 EditMode 当前 Draft Config 和编辑会话 `draft_version` 的完整只读值投影，包含完整 `StageConfig` 及其参数和判定规则。它不得借用 AppState，也不得提供修改 App Controller 所持草稿的能力；实现可以使用不可变共享引用或结构共享。
+
+进入 EditMode 时发布 `draft_version = 0` 的草稿快照；`ModifyDraft` 成功，或 `SaveDraft` 成功并更新 `revision` 时，App Controller 必须递增 `draft_version`，根据同一提交后的完整草稿生成并提交新的 AppViewSnapshot，再按上述命令状态终止边界发布 `Idle` 并完成成功响应。最新值通道可以合并中间快照，且响应通道与快照通道不保证 GUI 的观察顺序。
+
+一次性命令响应不得放入可跳过的快照；高频预览 Frame 也不进入快照，GUI 按刷新节奏从 Latest Frame Store 读取。v1 的 GUI 在一个 `ModifyDraft` 完成可靠响应，并观察到 `draft_version` 等于该响应版本的草稿快照前，不得发起下一次草稿编辑；如果已经观察到更高版本，表示目标提交也已被后续提交覆盖，可以视为已观察。
 
 ## 10. Camera Actor 控制消息
 
