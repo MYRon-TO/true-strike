@@ -294,7 +294,7 @@ GUI 不直接转换 AppState，不直接访问 Camera Actor 或 Inspection Actor
 
 GUI 按自身刷新节奏读取最新帧，允许跳帧且不维护待显示帧队列。
 
-GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将其与自身领域状态纯组合为不可变 `AppViewSnapshot`；GUI 订阅快照并替换本地持有值，允许跳过中间版本。一次性命令结果使用事件传递，预览帧不进入完整快照。旧模式任务尚未终止时，当前模式的检查状态投影为 `BusyWithPreviousSession`。
+GUI 不持有或长期借用 AppState。各 Actor 以替换式最新值语义发布不可变的组件状态投影，App Controller 将其与自身领域状态纯组合为不可变 `AppViewSnapshot`；GUI 订阅快照并替换本地持有值，允许跳过中间版本。`screen` 是当前业务模式的完整只读屏幕投影；编辑屏幕携带 Draft Config 的完整不可变快照，GUI 不直接读取或持有可变草稿。一次性命令结果使用事件传递，预览帧不进入完整快照。旧模式任务尚未终止时，当前模式的检查状态投影为 `BusyWithPreviousSession`。草稿快照可以使用不可变共享引用或结构共享实现，但不得借用 AppState，也不得与 App Controller 中的可变草稿形成可变别名。
 
 ## 8. 依赖与所有权约束
 

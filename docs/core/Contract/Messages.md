@@ -319,15 +319,38 @@ GUI 所见 `Starting` 由 ApplicationLifecycle 和 CameraActorProjection 组合�
 ```text
 AppViewSnapshot
 ├── lifecycle
-├── screen
+├── screen: Screen
+│   ├── Unavailable
+│   ├── Home
+│   ├── Edit(EditScreenSnapshot)
+│   │   ├── mode_session_id: ModeSessionId
+│   │   ├── config_path
+│   │   ├── draft: DraftConfigSnapshot
+│   │   │   ├── scheme_id: SchemeId
+│   │   │   ├── revision: u64
+│   │   │   ├── name
+│   │   │   ├── stages: StageConfig[]
+│   │   │   └── decision_rule: DecisionRule
+│   │   └── optional_presentation
+│   └── Production(ProductionScreenSnapshot)
+│       ├── mode_session_id: ModeSessionId
+│       ├── config_path
+│       ├── scheme_id: SchemeId
+│       ├── scheme_revision: u64
+│       ├── scheme_name
+│       └── optional_presentation
 ├── camera_status
 ├── inspection_status
 └── command_status
 ```
 
-App Controller 将 AppState、ApplicationLifecycle 和组件投影纯组合为不可变 AppViewSnapshot，以替换式最新值语义发布给 GUI。发送方是 App Controller，接收方是 GUI；GUI 可以跳过中间快照。
+App Controller 将 AppState、ApplicationLifecycle 和组件投影纯组合为不可变 AppViewSnapshot，以替换式最新值语义发布给 GUI。发送方是 App Controller，接收方是 GUI；GUI 可以跳过中间快照。ApplicationLifecycle 不是 `Running` 时，`screen` 必须为 `Unavailable`；`Running` 中的 `screen` 必须与当前 AppState 对应。
 
-一次性命令响应不得放入可跳过的快照；高频预览 Frame 也不进入快照，GUI 按刷新节奏从 Latest Frame Store 读取。
+`DraftConfigSnapshot` 是 EditMode 当前 Draft Config 的完整只读值投影，包含完整 `StageConfig` 及其参数和判定规则。它不得借用 AppState，也不得提供修改 App Controller 所持草稿的能力；实现可以使用不可变共享引用或结构共享。
+
+进入 EditMode、`ModifyDraft` 成功或 `SaveDraft` 成功并更新 `revision` 时，App Controller 必须先根据已提交草稿生成并提交新的 AppViewSnapshot 发布，再完成对应成功响应。最新值通道可以合并中间快照，且响应通道与快照通道不保证 GUI 的观察顺序。
+
+一次性命令响应不得放入可跳过的快照；高频预览 Frame 也不进入快照，GUI 按刷新节奏从 Latest Frame Store 读取。v1 的 GUI 在一个 `ModifyDraft` 完成可靠响应和新草稿快照的双重观察前，不得发起下一次草稿编辑。
 
 ## 10. Camera Actor 控制消息
 

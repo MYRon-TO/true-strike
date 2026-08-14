@@ -115,7 +115,7 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 该子文档定义：
 
 - Frame、Camera SDK 缓冲区和 Latest Frame Store 的生命周期；
-- GUI 预览 Frame、模式状态及配置临时资源的持有和释放；
+- GUI 预览 Frame、模式状态、完整只读草稿投影及配置临时资源的持有和释放；
 - Inspection Plan、检查申请和完整任务上下文的所有权；
 - Worker 输出、领域事件和 InspectionPresentation 的载荷转移；
 - 状态投影、AppViewSnapshot 和优雅关机的资源释放顺序。
@@ -125,6 +125,7 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 - 释放共享引用只结束当前持有者的所有权，底层对象在最后一个共享引用释放后销毁；
 - 状态外准备只有在操作成功提交后才能成为领域状态资源，失败、拒绝或过滤必须释放未提交资源；
 - App Controller 当前模式的 `optional_presentation` 是最近一次 InspectionPresentation 的唯一领域真值，GUI 只持有其最新状态快照；
+- EditMode 的 Draft Config 是唯一权威可变草稿；编辑屏幕只发布完整、不可变且可独立存活的草稿值投影；
 - 每个被接受的检查在 Worker 终止前固定 Frame 和 Inspection Plan，并持有完整任务上下文；
 - 优雅关机必须按 Camera、当前检查、Worker 与 Actor、应用状态和 Store 的依赖顺序释放资源。
 
