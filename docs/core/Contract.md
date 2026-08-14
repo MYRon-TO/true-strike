@@ -207,7 +207,7 @@ AppCommandError
 | `InvalidMode` | App Controller 校验命令与当前 AppState | 不执行命令内容，不改变状态 | 可以提示操作已失效；进入期望模式后可发起新命令 |
 | `ConfigLoadFailed` | Scheme Manager 读取并解析配置文件 | 不形成可提交的内存配置，释放读取和解析临时资源 | 可以展示路径、阶段和诊断；修复外部条件后可重试 |
 | `ConfigInvalid` | App Controller 字段校验或 Scheme Manager 完整校验 | 不提交修改、模式或方案，释放校验临时资源 | 可以展示位置、错误码和诊断；修改配置后可重试 |
-| `ConfigSaveFailed` | Scheme Manager 保存事务 | 原文件和内存草稿的已提交 revision 保持不变 | 可以展示路径、阶段和诊断；只允许用户重新发起保存 |
+| `ConfigSaveFailed` | Scheme Manager 保存事务 | 原文件和内存草稿的已提交 revision 保持不变 | 可以展示路径、阶段和诊断；用户可以重新发起保存 |
 | `ShuttingDown` | App Controller 已进入 `ShuttingDown` | 不执行普通命令，不改变关机流程 | GUI 不再提供业务操作；当前进程内不可重试普通命令 |
 
 配置错误按处理阶段划分：

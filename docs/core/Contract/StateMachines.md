@@ -166,7 +166,7 @@ Inspection Actor 在 `Idle` 中接受合法申请时：
 2. 使用申请字段、`inspection_id` 和 `started_at` 构造完整且不可变的 InspectionMetadata；
 3. 创建取消信号并准备固定帧和固定方案的任务；
 4. 向 Worker 提交任务；
-5. Worker 成功接受任务时读取单调时间，设置执行截止时间并单点提交 `Running`；
+5. Worker 成功接受任务后, Actor 读取单调时间，设置执行截止时间并单点提交 `Running`；
 6. 发布最新状态投影并返回包含 InspectionMetadata 的申请成功响应。
 
 Worker 成功接收任务即定义为 Worker 接受任务，不增加 `Submitting` 状态。任务提交失败属于内部基础设施失效，直接 `panic`，不执行状态回滚。
