@@ -57,7 +57,7 @@ App Controller
 Starting → Running → ShuttingDown → Terminated
 ```
 
-ApplicationLifecycle 描述应用进程生命周期，独立于 GUI 业务模式。`AppState` 仅在 `Running` 期间有效。进入 `ShuttingDown` 后拒绝后续普通命令，并启动异步、严格分阶段的关机协调：先停止 Camera Actor，再取消并等待当前检查，随后关闭 Worker 和 Actor、释放应用资源。异步等待不得阻塞 Actor 或运行时执行线程。
+ApplicationLifecycle 描述应用进程生命周期，独立于 GUI 业务模式。`AppState` 仅在 `Running` 期间有效。进入 `ShuttingDown` 后拒绝后续普通命令，并启动异步、严格分阶段的关机协调：先停止 Camera Actor，再取消并等待当前检查，随后关闭 Worker 和 Actor、释放核心应用资源。Camera 停止和各组件关闭使用应用级固定截止；异步等待不得阻塞 GUI、Actor 或运行时执行线程。`Terminated` 不等待 GUI 本地不可变共享引用物理销毁，但这些引用在 `ShuttingDown` 中不再具有业务逻辑有效性。
 
 ### 3.2 AppState
 

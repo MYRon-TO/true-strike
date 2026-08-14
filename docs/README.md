@@ -54,4 +54,6 @@
   - [消息规约](./core/Contract/Messages.md)：异步消息、请求响应、领域事件、投影和组件控制消息；
   - [资源生命周期](./core/Contract/Resources.md)：运行期资源的创建、持有、共享、转移和释放边界；
   - [执行、并发与取消](./core/Contract/ExecutionAndCancellation.md)：执行边界、时间语义、协作式取消和竞争裁决；
-  - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约。
+  - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约；
+  - [系统级不变量](./core/Contract/SystemInvariants.md)：按正确性性质分类的跨组件核心不变量；
+  - [系统级不变量整理与维护指南](./core/Contract/SystemInvariantsGuide.md)：双轴检查框架、覆盖矩阵和维护方法。

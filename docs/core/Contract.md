@@ -49,9 +49,10 @@
 ### 2.3 标识
 
 - 每次进入 EditMode 或 ProductionMode，App Controller 生成新的 `ModeSessionId`；
+- `ModeSessionId`、`inspection_id` 和 `frame_id` 在同一应用运行期间唯一且不得复用；标识空间耗尽或无法保证唯一时直接 `panic`；
 - `ModeSessionId` 随检查申请、检查元数据和异步检查事件传递，并用于返回 Home 时限定会话级取消；
 - `inspection_id` 由 Inspection Actor 接受检查申请时生成；
-- `frame_id` 由 Camera Actor 生成，且在应用运行期间唯一。
+- `frame_id` 由 Camera Actor 生成。
 
 ## 3. 用例与命令规约
 
@@ -96,7 +97,7 @@ v1 用例包括：
 - Inspection Actor 领域事件、计时器消息和组件关闭消息；
 - 请求响应关联、投递顺序、资源所有权和最新值投影语义。
 
-Scheme Manager 的配置读取、校验、方案构建和保存属于同步组件调用，不属于消息规约。
+Scheme Manager 的配置读取、校验、方案构建和保存是对 App Controller 的逻辑同步组件调用，不属于消息规约；可能阻塞的工作在独立执行环境中完成，App Controller 异步等待结果。
 
 关键约束：
 
@@ -303,78 +304,24 @@ App Controller 按 ApplicationLifecycle、AppState 和事件中的 `mode_session
 - `Running` 中收到当前任务匹配的 `Cancelled`；
 - Actor 在匹配 WorkerOutcome 之前先处理适用的取消截止消息；
 - revision 溢出、注册表描述符无效、阶段输出违反已声明契约或其他内部不变量被破坏；
-- 组件关闭协议顺序错误、组件关闭失败或内部通信基础设施失效。
+- 组件关闭协议顺序错误、组件关闭失败、组件关闭截止先于对应确认被处理，或内部通信基础设施失效。
 
 致命错误不得转换为 `ConfigInvalid`、`InspectionError` 或伪造的 InspectionEvent。`panic` 是异常终止出口，不是 ApplicationLifecycle 的 `Terminated`，也不保证完成业务级回滚或优雅资源释放。
 
 ## 10. 系统级不变量
 
-当前已确定的不变量：
+具体规约见 [Contract/SystemInvariants.md](./Contract/SystemInvariants.md)，整理和维护方法见 [Contract/SystemInvariantsGuide.md](./Contract/SystemInvariantsGuide.md)。
 
-1. App Controller 是 AppState 的唯一所有者。
-2. 模式相关命令由 App Controller 串行处理。
-3. 每次进入 EditMode 或 ProductionMode 都生成新的 `ModeSessionId`。
-4. 过期模式会话的异步事件不得修改当前展示状态。
-5. Camera Actor 是摄像头的唯一访问者。
-6. Camera Actor 是 Latest Frame Store 的唯一写入者。
-7. Camera Actor 不等待帧消费者。
-8. 已发布 Frame 始终不可变。
-9. GUI 不积压预览帧。
-10. Inspection Actor 不读取或持有 AppState。
-11. Inspection Actor 串行处理检查申请和任务事件。
-12. `Running` 和 `Cancelling` 均拒绝新检查申请。
-13. 同一时间最多执行一个检查任务。
-14. 检查期间固定 Frame 和 Inspection Plan。
-15. Inspection Core 只在 Inspection Worker 中执行。
-16. Inspection Core 及其算子不执行外部业务副作用。
-17. 检查完成与取消的竞争由 Inspection Actor 的事件处理顺序裁决。
-18. 每个被接受的检查最终必须释放 Actor 持有的 Frame 和 Inspection Plan，或因致命错误终止进程。
-19. InspectionPresentation 持有关联检查帧。
-20. 生产方案和测试任务方案都不使用空引用表示缺少方案；其可执行阶段列表可以为空，但判定规则始终存在。
-21. 配置中的禁用阶段必须完整校验，但不得构建、执行、产生输出或被引用。
-22. 启用阶段只能引用执行顺序中更早的启用阶段，v1 不自动重排阶段。
-23. 空执行方案必须执行已声明的判定规则，不存在隐式默认判定。
-24. 阶段输出提交后不可变；失败或取消不得提交当前阶段的部分输出。
-25. 通用派生产物缓存只属于单次检查，相同 ArtifactKey 至多成功计算一次。
-26. `ShuttingDown` 不属于 AppState，且进入后不可恢复为 `Running`。
-27. 关机开始后不再执行后续应用命令。
-28. 优雅关机必须先停止 Camera Actor，再等待当前检查终止。
-29. ApplicationLifecycle 只有在运行组件停止且运行期资源释放后才能进入 `Terminated`。
-30. 返回 Home 使用被关闭的 `ModeSessionId` 请求取消当前属于该会话的任务；迟到的旧会话取消不得影响其他会话任务。
-31. 第一个触发 `Cancelling` 的原因固定，重复取消不得覆盖原因或延长取消截止时间。
-32. Camera Actor 进入 `Stopping` 后不得再发布 Frame。
-33. GUI 不持有或长期借用 AppState，只持有不可变的最新状态快照。
-34. 完整校验成功的配置必须构建为完整 Inspection Plan，否则直接 `panic`。
-35. InspectionCompleted 和 InspectionFailed 的 InspectionMetadata 只由其 InspectionPresentation 携带，不得在事件顶层或 InspectionResult、InspectionError 中重复。
+系统级不变量按以下九类性质组织：
 
-后续每增加一个命令、状态或消息，都应检查其是否保持以上不变量。
+1. 权威与状态所有权；
+2. 状态合法性与守卫；
+3. 身份、关联与作用域；
+4. 原子性与提交一致性；
+5. 顺序、串行化与竞争裁决；
+6. 资源生命周期与隔离；
+7. 协议基数与交付语义；
+8. 不可变性、确定性与副作用边界；
+9. 进展、终止与故障边界。
 
-## 11. 完整性检查清单
-
-### 11.1 用例覆盖
-
-- [ ] 每个 Scope 功能都有对应命令或明确的后台行为；
-- [ ] 每个命令都定义前置状态、成功和失败结果；
-- [ ] 每个异步用例都定义终止路径；
-- [ ] 每个退出路径都定义资源释放。
-
-### 11.2 状态机覆盖
-
-- [ ] 每个命令在所有 AppState 下都有确定结果；
-- [ ] Inspection Actor 的每种输入在所有状态下都有确定结果；
-- [ ] 所有过渡状态都有成功、失败、取消和超时出口；
-- [ ] 过期及重复消息不会破坏当前状态。
-
-### 11.3 消息覆盖
-
-- [x] 每条消息都有发送方、接收方和载荷；
-- [x] 每个请求都有接受、拒绝或丢弃条件；
-- [x] 每个异步响应都有身份关联字段；
-- [x] 每条消息的资源所有权变化明确。
-
-### 11.4 错误与资源覆盖
-
-- [ ] 每个副作用都定义失败语义；
-- [ ] 每个错误都定义状态是否变化；
-- [ ] 每个共享资源都定义创建、持有、转移和释放；
-- [ ] 每个已接受任务都存在确定的资源终止路径。
+`SystemInvariants.md` 只定义跨组件核心不变量；识别边界、性质与流程双轴检查、覆盖矩阵、完整性判定和维护步骤只在 `SystemInvariantsGuide.md` 中定义。

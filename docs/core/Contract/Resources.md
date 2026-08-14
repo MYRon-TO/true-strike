@@ -118,6 +118,8 @@ App Controller 是 AppState 及其模式资源的唯一领域所有者。
 4. 原子替换成功后，内存草稿的 `revision` 在同一命令完成边界同步为已提交值；
 5. 构建出的方案在保存命令结束时释放，不成为生产方案。
 
+保存成功只保证同一运行环境中原子替换后的文件对后续读取可见；v1 不承诺掉电或操作系统崩溃后的持久性，不要求额外执行文件或目录同步。
+
 ## 7. Inspection Plan
 
 Inspection Plan 由 Scheme Manager 从有效配置完整构建，是不可变的跨组件资源。部分构建结果不得作为 Inspection Plan 发布。
@@ -267,12 +269,14 @@ Actor Projection 和 AppViewSnapshot 是不可变最新值资源：
 1. Camera Actor 进入 `Stopping` 后停止发布 Frame，停止采集循环并关闭 Camera SDK，最后进入 `Stopped`；
 2. 摄像头停止后，Inspection Actor 取消当前任务或确认已经 `Idle`；任务终止后释放任务上下文和计时器资源；
 3. 任务为 `Idle` 后关闭 Inspection Worker 和各 Actor；关闭确认表示任务入口、内部计时器、通信资源和对应执行线程已经释放；
-4. App Controller 释放原 AppState 及其模式资源，清空并释放 Latest Frame Store，关闭状态投影发布边界并释放其他应用运行期资源；
+4. App Controller 释放原 AppState 及其模式资源，清空并释放 Latest Frame Store，关闭状态投影发布边界并释放其他核心应用运行期资源；
 5. 提交 ApplicationLifecycle 的 `Terminated`，完成关机等待者。
 
-同一关闭阶段内无依赖的组件可以并行关闭，但不得颠倒上述资源依赖。GUI 本地快照或预览引用由 GUI 在替换或退出时释放；其短暂存活不得允许 GUI 在 `ShuttingDown` 或 `Terminated` 中继续执行业务操作。
+Camera 停止、Inspection Worker 关闭和各 Actor 关闭分别使用应用级固定截止。对应确认与截止以关机协调方的实际处理顺序裁决：先处理确认则该操作完成，先处理适用截止则直接 `panic`。同一关闭阶段内无依赖的组件可以并行关闭，但不得颠倒上述资源依赖。
 
-组件关闭失败、内部通信基础设施失效或取消宽限期耗尽直接 `panic`；`panic` 不是资源正常释放完成或 `Terminated` 的替代状态。
+`Terminated` 不等待 GUI 本地快照、预览 Frame 或其中不可变共享对象物理销毁。GUI 在替换或退出时释放本地引用；这些引用从进入 `ShuttingDown` 起不再具有业务逻辑有效性，也不得允许 GUI 继续执行业务操作。
+
+组件关闭失败、内部通信基础设施失效、取消宽限期耗尽或组件关闭截止先于确认被处理时直接 `panic`；`panic` 不是资源正常释放完成或 `Terminated` 的替代状态。
 
 ## 13. 资源生命周期不变量
 
@@ -287,4 +291,5 @@ Actor Projection 和 AppViewSnapshot 是不可变最新值资源：
 9. 每个被接受的任务最终必须释放 Actor 和 Worker 持有的 Frame、Inspection Plan、取消及计时器资源，或因致命错误终止进程。
 10. InspectionPresentation 的领域真值只存在于当前模式状态；GUI 快照不是第二状态所有者。
 11. 过期 Worker 输出、计时器消息和领域事件不得恢复已释放资源或改变当前资源所有权。
-12. ApplicationLifecycle 只有在组件停止且应用所有者已按关机顺序释放运行期资源后才能进入 `Terminated`。
+12. ApplicationLifecycle 只有在核心运行组件停止且核心应用所有者已按关机顺序释放其运行期资源后才能进入 `Terminated`；GUI 本地不可变共享引用的物理存活不阻止该转换。
+13. Camera 停止、Inspection Worker 关闭和各 Actor 关闭必须在对应应用级固定截止前由关机协调方处理到确认，否则直接 `panic`。

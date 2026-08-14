@@ -2,7 +2,7 @@
 
 本文定义 v1 的端到端用例。整体规约索引见 [行为规约](../Contract.md)。
 
-App Controller 串行处理命令和相关事件。模式切换是不可中断的原子操作：准备期间保持原状态，全部准备成功后一次性提交新状态。未提交的中间资源在失败时释放。
+App Controller 按命令接收顺序串行处理应用命令。可能阻塞的 Scheme Manager 操作在独立执行环境中完成，App Controller 异步等待期间可以处理 InspectionEvent 和维持 GUI 状态发布，但不得开始处理后续应用命令；后续命令包括 ReturnHome 和 Shutdown 均保持排队。v1 不为该等待设置截止时间，操作永久不返回时，当前命令及其后的命令可以永久等待，但不得阻塞 GUI、Actor 或异步运行时执行线程。模式切换仍是不可中断的原子提交：准备期间保持原状态，全部准备成功后一次性提交新状态，失败时释放未提交资源。
 
 除重复关机请求外，ApplicationLifecycle 不是 `Running` 时，应用命令按生命周期规则拒绝。ApplicationLifecycle 为 `Running`、但命令与当前 AppState 不匹配时，统一返回携带命令、实际模式和期望模式的 `InvalidMode`；Home 中的返回主页命令除外，它幂等成功。状态不匹配时不执行命令内容。ApplicationLifecycle 为 `ShuttingDown` 时，重复关机请求附着到当前关机流程。
 
@@ -144,6 +144,8 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取或�
 
 完整校验成功的草稿无法构建为完整 Inspection Plan 时直接 `panic`，不返回业务错误。构建出的方案在保存命令结束时释放。
 
+保存成功只保证同一运行环境中原子替换后的文件对后续读取可见，并与内存草稿逻辑一致；v1 不承诺掉电或操作系统崩溃后的持久性，不要求额外执行文件或目录同步。
+
 ## 8. 发起测试检查
 
 - **触发方**：GUI。
@@ -197,17 +199,17 @@ ProductionMode 运行期间不自动重新读取配置文件。配置读取或�
   1. ApplicationLifecycle 已为 `ShuttingDown` 时，将请求附着到当前关机流程并跳过后续启动步骤；
   2. ApplicationLifecycle 为 `Running` 时，App Controller 将其原子地切换为 `ShuttingDown`，异步启动唯一的关机协调流程；
   3. 拒绝队列中排在首次关机命令之后及之后新到达的普通应用命令；
-  4. 请求 Camera Actor 停止采集并关闭摄像头，异步等待其确认 `Stopped`；
+  4. 请求 Camera Actor 停止采集并关闭摄像头，启动应用级固定 Camera 停止截止，异步等待其确认 `Stopped`；
   5. Camera Actor 停止后发送 `CancelCurrentForShutdown`，异步等待 `InspectionBecameIdle`；Actor 已为 `Idle` 时立即响应；
-  6. 关闭 Inspection Worker 和各 Actor；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
-  7. 释放原 AppState、Latest Frame Store 及其他应用资源；
+  6. 关闭 Inspection Worker 和各 Actor，并为每个关闭操作启动应用级固定截止；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
+  7. 释放原 AppState、Latest Frame Store、状态发布边界及其他核心应用资源；
   8. 将 ApplicationLifecycle 切换为 `Terminated`，完成所有附着的关机请求。
-- **成功结果**：应用全部组件已停止，运行期资源已释放。
-- **失败结果**：无业务失败；组件关闭失败、内部通信失效或取消宽限期耗尽时直接 `panic`。
+- **成功结果**：应用核心运行组件已停止，核心所有者持有的运行期资源已释放；不等待 GUI 本地不可变共享引用物理销毁。
+- **失败结果**：无业务失败；组件关闭失败、内部通信失效、取消宽限期耗尽，或 Camera、Worker、Actor 的关闭截止先于对应确认被协调方处理时直接 `panic`。
 - **状态转换**：首次请求使 ApplicationLifecycle 从 `Running` 经 `ShuttingDown` 转入 `Terminated`；重复请求保持 `ShuttingDown` 并等待同一转换。`ShuttingDown` 不属于 AppState。
 - **完成边界**：ApplicationLifecycle 已进入 `Terminated`。
 - **异步后续**：关机命令发起后由异步协调流程推进，直到进入 `Terminated`；等待不得阻塞 Actor 或异步运行时执行线程。
-- **资源变化**：按处理过程释放全部应用资源。当前 AppState 不必先转换为 Home。
+- **资源变化**：按处理过程释放核心应用所有者持有的运行期资源。当前 AppState 不必先转换为 Home。GUI 本地快照和预览 Frame 可以存活到 GUI 替换或退出，但从进入 `ShuttingDown` 起不再具有业务逻辑有效性，也不得触发业务操作。
 - **并发关系**：关机命令之前的命令先完成；之后的普通命令返回 `ShuttingDown`；重复关机请求等待同一完成结果。关机开始后不可撤销，Camera Actor 停止前不得发送检查取消。
 
 关机与检查完成或失败的竞争由 Inspection Actor 的串行处理顺序裁决：

@@ -15,7 +15,7 @@
 - Camera Actor 串行处理启动、停止和采集事件，并唯一裁决摄像头状态；
 - 每个状态所有者一次只提交一个逻辑状态转换，转换中的状态与资源变化必须保持一致。
 
-“串行处理”不限定专用线程、邮箱或运行时实现，也不要求耗时工作在状态所有者的执行线程上完成。异步等待不得阻塞 Actor 或异步运行时执行线程。
+“串行处理”不限定专用线程、邮箱或运行时实现，也不要求耗时工作在状态所有者的执行线程上完成。异步等待不得阻塞 GUI、Actor 或异步运行时执行线程。
 
 ### 1.2 独立执行边界
 
@@ -23,7 +23,8 @@
 - Inspection Worker 在独立工作线程中同步调用 Inspection Core；
 - Inspection Worker 同一时间最多接受并执行一个检查任务；
 - Inspection Core 不在 GUI、App Controller 或 Inspection Actor 的执行边界中运行；
-- Scheme Manager 的同步调用由 App Controller 按命令顺序发起，调用期间不并行处理后续应用命令。
+- Scheme Manager 对 App Controller 提供逻辑同步调用，但可能阻塞的配置读取、解析、校验、方案构建和保存必须在独立执行环境中完成；App Controller 异步等待结果，期间可以处理 InspectionEvent 和维持 GUI 状态发布，但不得开始处理排在当前命令之后的应用命令；
+- v1 不为上述 Scheme Manager 操作设置截止时间，也不保证其有界完成；排在未完成命令之后的 ReturnHome 或 Shutdown 必须保持排队，且不得越过当前命令。
 
 ### 1.3 顺序定义
 
@@ -240,17 +241,17 @@ App Controller 处理 ReturnHome 时，先记录被关闭模式的 `ModeSessionI
 
 ## 9. 优雅关机的并发规则
 
-首次 Shutdown 由 App Controller 在其串行命令顺序中提交 `ShuttingDown`，随后启动唯一的异步关机流程。此前已经开始处理的命令先完成；之后的普通命令返回 `ShuttingDown`；重复 Shutdown 附着等待同一 `ShutdownCompleted`。
+首次 Shutdown 由 App Controller 在其串行命令顺序中提交 `ShuttingDown`，随后启动唯一的异步关机流程。此前已经开始处理的命令先完成；如果当前 Scheme Manager 操作永久不返回，排在其后的 Shutdown 也可以永久等待且不得越过当前命令。进入 `ShuttingDown` 后，后续普通命令返回 `ShuttingDown`，重复 Shutdown 附着等待同一 `ShutdownCompleted`。
 
 关机严格按以下顺序推进：
 
-1. 请求 Camera Actor 停止，异步等待 `CameraStopped`；
+1. 请求 Camera Actor 停止，启动应用级固定 Camera 停止截止，异步等待 `CameraStopped`；
 2. 摄像头停止后发送 CancelCurrentForShutdown，异步等待 `InspectionBecameIdle`；
-3. Actor 已为 `Idle` 后关闭 Inspection Worker 和各 Actor；同阶段无依赖的关闭可以并行发起并统一等待；
-4. 释放 AppState、Latest Frame Store、状态发布边界及其他应用运行期资源；
+3. Actor 已为 `Idle` 后关闭 Inspection Worker 和各 Actor，并分别启动应用级固定关闭截止；同阶段无依赖的关闭可以并行发起并统一等待；
+4. 释放 AppState、Latest Frame Store、状态发布边界及核心所有者持有的其他运行期资源；
 5. 提交 `Terminated` 并完成所有关机请求。
 
-关机与检查终止的竞争仍由 Inspection Actor 的处理顺序裁决。进入 `ShuttingDown` 后到达的 InspectionEvent 不得更新 GUI 或模式展示；控制响应和关闭确认不应用模式事件过滤规则。
+组件关闭确认与对应截止以关机协调方的实际处理顺序裁决，截止先被处理时直接 `panic`。关机与检查终止的竞争仍由 Inspection Actor 的处理顺序裁决。进入 `ShuttingDown` 后到达的 InspectionEvent 不得更新 GUI 或模式展示；控制响应和关闭确认不应用模式事件过滤规则。`Terminated` 不等待 GUI 本地不可变共享引用物理销毁。
 
 ## 10. 执行与取消不变量
 
@@ -269,3 +270,5 @@ App Controller 处理 ReturnHome 时，先记录被关闭模式的 `ModeSessionI
 13. 过期或身份不匹配的输出、计时器和取消通知不得改变当前状态或资源。
 14. 关机必须先停止 Camera Actor，再取消并等待当前检查任务终止。
 15. Inspection Worker 工作线程只在任务已经 `Idle` 后关闭。
+16. 可能阻塞的 Scheme Manager 操作不得阻塞 GUI、Actor 或异步运行时执行线程；v1 不设置其截止时间，后续应用命令不得越过未完成操作。
+17. Camera 停止、Inspection Worker 关闭和 Actor 关闭必须使用应用级固定截止；确认与截止由关机协调方按实际处理顺序裁决。

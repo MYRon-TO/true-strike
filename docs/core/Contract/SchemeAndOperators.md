@@ -165,7 +165,7 @@ InspectionPlan
 - `ConfigInvalid`：已经形成内存 `InspectionSchemeConfig`，但未通过完整静态校验；
 - 方案构建致命错误：已经通过完整校验的配置无法构建为完整 Inspection Plan，表示校验器、算子描述符或构建器之间的内部契约被破坏，直接 `panic`。
 
-`ConfigSaveFailed` 只表示保存事务中的序列化、临时文件写入或原子替换失败。方案已经构建并开始执行后，算子或判定求值失败产生 `InspectionError`，并由 Inspection Actor 在适用条件下发布 `InspectionFailed`。
+`ConfigSaveFailed` 只表示保存事务中的序列化、临时文件写入或原子替换失败。保存成功保证同一运行环境中替换后的文件对后续读取可见，不承诺掉电或操作系统崩溃后的持久性，不要求额外执行文件或目录同步。方案已经构建并开始执行后，算子或判定求值失败产生 `InspectionError`，并由 Inspection Actor 在适用条件下发布 `InspectionFailed`。
 
 配置校验成功不产生 Inspection Plan。保存草稿和发起测试检查仍必须按各自用例实际构建方案；保存草稿以实际构建成功为提交前提，构建出的方案不进入模式状态。
 

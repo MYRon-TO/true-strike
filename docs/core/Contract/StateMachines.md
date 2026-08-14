@@ -49,19 +49,21 @@ Starting → Running → ShuttingDown → Terminated
 | Running | 首个优雅关机请求 | ShuttingDown | 原子提交状态并异步启动关机协调流程 |
 | ShuttingDown | 应用命令 | ShuttingDown | 返回 `ShuttingDown`，不执行命令内容 |
 | ShuttingDown | 重复关机请求 | ShuttingDown | 附着到同一关机流程，等待同一完成结果 |
-| ShuttingDown | 全部关闭步骤完成 | Terminated | 运行组件已停止，运行期资源已释放 |
-| ShuttingDown | 组件关闭失败或取消宽限期耗尽 | 异常终止 | `panic` |
+| ShuttingDown | 全部关闭步骤完成 | Terminated | 核心运行组件已停止，核心所有者持有的运行期资源已释放；不等待 GUI 本地不可变共享引用物理销毁 |
+| ShuttingDown | 组件关闭失败、检查取消宽限期耗尽或组件关闭截止先于确认被处理 | 异常终止 | `panic` |
 | Terminated | 迟到的运行期事件 | Terminated | 丢弃 |
 
 ### 2.1 关机协调
 
-关机采用异步、严格分阶段的协调流程。等待是逻辑异步等待，不得阻塞 Actor 或异步运行时的执行线程：
+关机采用异步、严格分阶段的协调流程。等待是逻辑异步等待，不得阻塞 GUI、Actor 或异步运行时的执行线程：
 
-1. 请求 Camera Actor 停止采集并关闭摄像头，等待 `Stopped` 确认；
-2. Camera Actor 停止后，发送 `CancelCurrentForShutdown` 并等待 `InspectionBecameIdle`；Actor 已为 `Idle` 时立即响应；
-3. 关闭 Inspection Worker 和各 Actor；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
-4. 释放原 AppState、Latest Frame Store 及其他应用资源；
+1. 请求 Camera Actor 停止采集并关闭摄像头，启动应用级固定 Camera 停止截止，等待 `Stopped` 确认；
+2. Camera Actor 停止后，发送 `CancelCurrentForShutdown` 并等待 `InspectionBecameIdle`；Actor 已为 `Idle` 时立即响应，检查取消继续使用既定取消宽限期；
+3. 关闭 Inspection Worker 和各 Actor，并分别启动应用级固定关闭截止；同一阶段内无依赖的关闭操作可以并行发起并统一等待；
+4. 释放原 AppState、Latest Frame Store、状态发布边界及其他核心应用资源；
 5. 提交 `Terminated`，完成所有附着到本次关机的等待者。
+
+Camera 停止、Worker 关闭或 Actor 关闭的确认与对应截止以关机协调方的实际处理顺序裁决；先处理确认则该阶段完成，先处理适用截止则直接 `panic`。不设置独立的整体关机截止。
 
 如果关机取消首次触发 `Running → Cancelling`，取消宽限期从 Actor 实际处理 `CancelCurrentForShutdown` 时开始，不包含等待 Camera Actor 停止的时间；如果 Actor 已在取消中，关机等待附着到原流程且不重置截止时间。进入 `ShuttingDown` 后，正常命令接收边界必须继续能够立即拒绝后续命令，不得等到关机完成后才返回。
 
@@ -87,7 +89,7 @@ ProductionMode(mode_session_id, config_path, loaded_config, production_plan, opt
 | EditMode | 返回主页 | Home | 无 |
 | ProductionMode | 返回主页 | Home | 无 |
 
-模式进入采用状态外准备和单点提交，不增加显式过渡状态。准备期间 App Controller 保持原状态并继续占有串行处理权，后续命令和异步事件等待处理。准备失败时释放临时资源并保留原状态。GUI 如需展示命令正在执行，应使用命令状态投影，不增加 AppState 过渡状态。
+模式进入采用状态外准备和单点提交，不增加显式过渡状态。准备期间 App Controller 保持原状态；可能阻塞的 Scheme Manager 操作在独立执行环境中进行，App Controller 异步等待，并可以处理 InspectionEvent 和维持 GUI 状态发布，但后续应用命令必须排队且不得越过当前命令。准备失败时释放临时资源并保留原状态。GUI 如需展示命令正在执行，应使用命令状态投影，不增加 AppState 过渡状态。
 
 ### 3.1 命令与状态矩阵
 

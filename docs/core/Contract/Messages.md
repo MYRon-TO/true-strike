@@ -29,7 +29,7 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 - 模式领域事件使用其中 InspectionMetadata 的 `mode_session_id` 隔离模式会话；
 - 实现不得依赖状态投影确认请求是否成功、任务是否终止或组件是否已经关闭。
 
-系统不进行隐式重试。内部通信基础设施失效直接 `panic`；调用方不得通过自动重发制造重复副作用。
+系统不进行隐式重试。进程内可靠消息基础设施对每次成功发送必须恰好入队一次，不得自行复制或重试；发送成功只表示消息已入队，不表示接收方已经处理。发送失败、接收能力意外关闭或其他内部通信基础设施失效直接 `panic`。业务层只处理规约明确允许的重复请求，调用方不得通过自动重发制造重复副作用。
 
 ### 1.3 顺序与投递
 
@@ -53,7 +53,8 @@ Scheme Manager 的配置读取、校验、方案构建和保存属于同步组�
 
 - `ModeSessionId` 由 App Controller 在每次进入 EditMode 或 ProductionMode 时生成，用于模式事件隔离和返回 Home 时的会话级取消；
 - `inspection_id` 由 Inspection Actor 接受检查申请时生成，是具体任务、Worker 输出和计时器的唯一关联标识；
-- `frame_id` 由 Camera Actor 生成，在应用运行期间唯一。
+- `frame_id` 由 Camera Actor 生成；
+- 三类标识在同一应用运行期间均必须唯一且不得复用；标识空间耗尽或无法保证唯一时直接 `panic`。
 
 `ModeSessionId` 不替代 `inspection_id` 标识具体检查；会话级取消只匹配 Actor 当前唯一任务，不表示取消该会话及以前的任务集合。
 
@@ -173,7 +174,7 @@ Worker 不发送进度消息。Inspection Actor 只处理与当前任务 `inspec
 CloseInspectionWorker -> InspectionWorkerClosed
 ```
 
-该控制请求只在 Inspection Actor 已为 `Idle`、不存在尚待交付的 Worker 输出时发送。响应表示任务入口已经关闭且工作线程已经退出。重复关闭幂等返回 `InspectionWorkerClosed`；关闭期间提交新任务属于内部协议错误，直接 `panic`。
+该控制请求只在 Inspection Actor 已为 `Idle`、不存在尚待交付的 Worker 输出时发送。响应表示任务入口已经关闭且工作线程已经退出。重复关闭幂等返回 `InspectionWorkerClosed`；关闭期间提交新任务属于内部协议错误，直接 `panic`。关机协调方发送请求时启动应用级固定 Worker 关闭截止；响应与截止按协调方实际处理顺序裁决，截止先被处理时直接 `panic`。
 
 发送方是 App Controller 的关机协调流程，接收方是 Inspection Worker。
 
@@ -245,6 +246,7 @@ CloseInspectionActor -> InspectionActorClosed
 - 响应表示 Actor 已进入 `Closed`、内部计时器已取消且通信资源已释放；
 - `Running` 或 `Cancelling` 时收到关闭请求表示关机协调顺序错误，直接 `panic`；
 - 重复关闭幂等返回 `InspectionActorClosed`。
+- 关机协调方发送首次关闭请求时启动应用级固定 Actor 关闭截止；关闭确认与截止按协调方实际处理顺序裁决，截止先被处理时直接 `panic`。
 
 ## 7. Inspection Actor 领域事件
 
@@ -347,5 +349,6 @@ StopCamera -> StopCameraResponse
 - `Stopping` 中的重复停止附着到同一停止流程；
 - `CameraStopped` 只对应 Actor 的 `Stopped` 状态，表示此后不会再发布 Frame；ApplicationLifecycle 已为 `Running` 时发起的正常关机必须得到该响应；
 - 摄像头初始化、采集或关闭失败直接 `panic`。
+- 关机协调方在正常关机中发送 `StopCamera` 时启动应用级固定 Camera 停止截止；`CameraStopped` 与截止按协调方实际处理顺序裁决，截止先被处理时直接 `panic`。
 
 Camera Actor 的采集结果和 Latest Frame Store 更新属于组件内部数据流，不是应用命令或检查消息。GUI 和 App Controller 均不向 Camera Actor 请求单帧。
