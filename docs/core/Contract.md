@@ -156,7 +156,7 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 
 ## 8. 配置、方案与算子规约
 
-配置、方案与算子的详细规约见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)，DecisionRule.Expression 的封闭抽象语法和静态类型系统见[判定表达式语法与类型规约](./Contract/DecisionExpression.md)。
+配置、方案与阶段组合的详细规约见[配置、方案与算子规约](./Contract/SchemeAndOperators.md)，所有具体算子必须遵守的完整描述符结构见[算子描述符规约](./Contract/OperatorDescriptor.md)，v1 图像输入见[规范 Frame 规约](./Contract/FrameFormat.md)，DecisionRule.Expression 的封闭抽象语法和静态类型系统见[判定表达式语法与类型规约](./Contract/DecisionExpression.md)。已注册的具体算子见文档索引中的算子规约。
 
 这些子文档定义：
 
@@ -168,8 +168,8 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 - DecisionRule 的 Expression、AlwaysPass 和 AlwaysFail 三种形式，以及 Expression 的输入、引用、校验和求值边界；
 - Expression AST 的字面量、值类型、逻辑与比较操作符、静态类型规则和结构限制；
 - 基于 Bind 短路语义的不可变累计阶段输出；
-- 单次检查内通用派生产物的不可变共享缓存；
-- 算子的显式输入、副作用、错误、取消和输出公共契约；
+- 算子参数、显式输入、StageOutput、稳定错误码、构建、执行和取消的完整描述符；
+- 单次检查内派生产物的注册生产者、类型化按需请求和不可变共享缓存；
 - 空执行方案、阶段输出和多阶段可视化数据的公共语义；
 - Inspection Plan 内部动态分派实现与跨组件契约的边界。
 
@@ -303,7 +303,7 @@ App Controller 按 ApplicationLifecycle、AppState 和事件中的 `mode_session
 以下情况不属于可恢复业务错误，直接 `panic`：
 
 - 任一组件、算子注册表或设备初始化失败；
-- 摄像头采集、SDK 缓冲区复制、Frame 构造、采集循环停止或设备关闭失败；
+- 摄像头采集、SDK 图像转换或缓冲区复制、Frame 构造、采集循环停止或设备关闭失败；
 - 完整校验成功的配置无法构建为完整 Inspection Plan；
 - Worker 任务提交失败，或者 Worker、Inspection Core 或算子发生未声明的 panic；
 - `Running` 中收到当前任务匹配的 `Cancelled`；

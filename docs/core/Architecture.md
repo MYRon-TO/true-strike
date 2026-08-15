@@ -114,11 +114,11 @@ GUI、Scheme Manager 和 Inspection Actor 均不持有 `AppState` 副本。Inspe
 Frame
 ├── frame_id
 ├── captured_at
-├── image_data
+├── image: Rgb8Image
 └── camera_metadata
 ```
 
-Frame 在发布后不可变，通过共享引用在组件之间传递。图像内存归应用所有，不依赖 Camera SDK 缓冲区的后续生命周期。
+v1 Frame 只包含由类型系统保证有效的规范 Rgb8Image，不保存运行期 `FrameFormatId` 与裸字节的可错配组合。具体通道、布局、尺寸、构造和 Camera SDK 转换规则见[规范 Frame 规约](./Contract/FrameFormat.md)。Frame 在发布后不可变，通过共享引用在组件之间传递；图像内存归应用所有，不依赖 Camera SDK 缓冲区的后续生命周期。
 
 ### 4.2 Camera Actor
 

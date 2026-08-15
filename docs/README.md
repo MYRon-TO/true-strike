@@ -55,5 +55,9 @@
   - [资源生命周期](./core/Contract/Resources.md)：运行期资源的创建、持有、共享、转移和释放边界；
   - [执行、并发与取消](./core/Contract/ExecutionAndCancellation.md)：执行边界、时间语义、协作式取消和竞争裁决；
   - [配置、方案与算子](./core/Contract/SchemeAndOperators.md)：方案构建边界、所有权和算子规约；
+  - [算子描述符](./core/Contract/OperatorDescriptor.md)：具体算子的参数、输入输出、构建、执行、错误、取消及派生产物契约；
+  - [规范 Frame](./core/Contract/FrameFormat.md)：v1 图像类型、内存布局、构造和采集边界转换；
   - [系统级不变量](./core/Contract/SystemInvariants.md)：按正确性性质分类的跨组件核心不变量；
   - [系统级不变量整理与维护指南](./core/Contract/SystemInvariantsGuide.md)：双轴检查框架、覆盖矩阵和维护方法。
+- 现有算子：文档统一位于 `./operators/` 目录；
+  - [ROI 颜色均值匹配算子](./core/Operators/ColorMeanMatch.md)：`color_mean_match` 的完整具体算子规约；

@@ -2,7 +2,7 @@
 
 本文定义视觉检测配置的有效性、不可变 Inspection Plan 的构建边界，以及不依赖具体算子类型的通用执行契约。DecisionRule.Expression 的封闭抽象语法和静态类型系统见[判定表达式语法与类型规约](./DecisionExpression.md)。整体规约索引见[行为规约](../Contract.md)，方案和任务资源的完整生命周期见[资源生命周期规约](./Resources.md)，Inspection Core 的取消检查点和终止语义见[执行、并发与取消规约](./ExecutionAndCancellation.md)。
 
-本文只规定所有算子必须遵守的公共契约，不定义 v1 注册哪些具体算子及其业务参数。
+本文规定所有算子必须遵守的公共契约；完整 `OperatorDescriptor`、稳定错误码和派生产物声明见[算子描述符规约](./OperatorDescriptor.md)。v1 注册的具体算子由独立算子文档定义。
 
 ## 1. 配置模型与术语
 
@@ -191,31 +191,20 @@ DecisionRule 在所有启用阶段完成后求值，因此可以引用配置中�
 
 ## 3. 算子注册表
 
-程序维护固定的算子注册表。注册表在应用初始化完成后必须不可变，并至少为每种算子提供：
+程序维护固定的算子注册表。注册表在应用初始化完成后必须不可变，每种算子必须提供符合[算子描述符规约](./OperatorDescriptor.md)的完整描述符：
 
 ```text
 OperatorDescriptor
 ├── operator_id: OperatorId
-├── parameter_schema
+├── parameter_contract
 ├── input_contract
 ├── output_contract
 ├── build_contract
+├── execution_contract
 └── cancellation_contract
 ```
 
-输出契约必须显式描述可供 DecisionRule 读取的判定字段：
-
-```text
-OutputContract
-├── stage_output_type
-└── decision_fields: DecisionFieldDescriptor[]
-
-DecisionFieldDescriptor
-├── field_id: DecisionFieldId
-└── value_type: ExpressionType
-```
-
-DecisionFieldId 必须匹配 `[a-z][a-z0-9_]{0,63}`，在同一个 OutputContract 中唯一且稳定，只标识该输出契约公开的顶层判定字段，不是任意对象路径、Rust 字段名或 GUI 展示名称。`value_type` 只能是表达式语法规约定义的 v1 类型。没有判定字段时，`decision_fields` 使用空数组。StageOutput 必须为每个已声明字段提供一个符合对应 ExpressionType 及值约束的 ExpressionValue。
+输出契约必须声明封闭的 StageOutput 名义类型，并显式列出可供 DecisionRule 读取的顶层判定字段。DecisionFieldId 必须匹配 `[a-z][a-z0-9_]{0,63}`，在同一个 OutputContract 中唯一且稳定；其 ExpressionType 必须与被映射 StageOutput 字段完全一致。没有判定字段时使用空数组。
 
 公共约束：
 
@@ -227,7 +216,7 @@ DecisionFieldId 必须匹配 `[a-z][a-z0-9_]{0,63}`，在同一个 OutputContrac
 - 重复 OperatorId、无效描述符或注册表初始化失败属于组件初始化失败，直接 `panic`，不作为 `ConfigInvalid`；
 - 未在注册表中找到配置引用的 OperatorId 属于 `ConfigInvalid`。
 
-每个具体算子必须另行声明：参数模式、可读取的输入、输出类型、执行错误、取消检查方式，以及从取消信号设置到调用返回的最坏时间上界。尚未给出有界取消保证的算子不得声称支持有界优雅取消。
+每个具体算子必须另行声明参数模式、可读取输入、完整 StageOutput、DecisionField、正常业务结果、稳定参数及执行错误码、取消检查方式、最坏取消响应时间和资源上界。尚未给出有界取消保证的算子不得声称支持有界优雅取消。
 
 ## 4. 方案构建
 
@@ -376,26 +365,30 @@ initial_context
 
 ## 7. 通用派生产物缓存
 
-多个算子需要相同通用中间产物时，例如使用相同转换参数的灰度图，不应重复计算。Inspection Core 为单次检查提供任务级派生产物缓存。
+多个算子需要相同通用中间产物时，例如使用相同转换参数的灰度图，不应重复计算。Inspection Core 为单次检查提供任务级 Provider 和派生产物缓存；完整描述符和类型规则见[算子描述符规约](./OperatorDescriptor.md#8-任务级派生产物)。
 
 ```text
-ArtifactKey
+ArtifactKey<T>
 ├── artifact_kind
 └── all_result_affecting_parameters
 ```
 
+派生产物采用首次请求时惰性计算，不在 Plan 执行前预计算全部需求。第一个请求方触发 Provider 调用该 ArtifactKind 唯一注册的生产者；成功结果发布为不可变共享产物，后续相同键请求直接取得共享引用。
+
 缓存契约：
 
-- 缓存只属于当前一次 Inspection Core 调用，不跨检查任务共享；
+- 缓存只属于当前一次 Inspection Core 调用，不跨检查任务或 Frame 共享；
 - ArtifactKey 必须包含所有影响计算结果的参数；
+- 同一 ArtifactKind 只能有一个稳定生产语义，改变语义必须更换 ArtifactKind；
 - 同一键在一次检查中至多成功计算一次；
 - 成功发布的派生产物不可变，多个算子可以共享读取；
 - 计算失败或观察到取消时，不得发布部分产物或失败缓存项；
-- 算子只能通过显式 provider 请求产物，不得删除、覆盖或修改缓存项；
+- 算子只能请求描述符已声明并在构建期绑定的类型化键，不得直接删除、覆盖、修改缓存项或自行发布共享产物；
 - 派生产物不是阶段输出，不得被 DecisionRule 或其他阶段通过 StageId 引用；
+- 首次生产失败归入当前请求阶段的 OperatorExecutionFailed；
 - Core 调用完成、失败或取消后释放整个缓存及其中间资源。
 
-实现可以在 Core 调用内部使用受控可变性、惰性初始化或共享引用避免重复计算，但对算子暴露的语义必须等价于从不可变映射读取。并发初始化若未来被允许，也必须保证同一键只发布一个确定结果；v1 的线性执行不要求并发计算派生产物。
+v1 的线性执行不要求并发初始化。未来允许并发请求时，也必须保证同一键只发布一个确定结果。
 
 ## 8. 判定规则执行
 

@@ -89,7 +89,7 @@
 3. **SI-A8-03 Core 与算子副作用隔离**：Inspection Core 及其算子不得访问 AppState、Latest Frame Store、配置文件、GUI 或未声明的全局业务状态，不得执行设备控制、持久化或应用消息等外部业务副作用。
 4. **SI-A8-04 方案执行稳定**：Inspection Actor、Inspection Worker 和 Inspection Core 不得构建或修改 Inspection Plan；完整校验成功后实际构建的方案必须完整成功，否则直接 `panic`。
 5. **SI-A8-05 空执行方案显式判定**：生产方案和测试方案均不得以空引用表示缺少方案；可执行阶段列表可以为空，但判定规则必须存在，空执行方案不得采用隐式默认判定。
-6. **SI-A8-06 阶段输出隔离**：已提交阶段输出和已发布派生产物不得修改；阶段失败或取消不得提交部分输出，任务级派生产物缓存不得跨检查共享。
+6. **SI-A8-06 阶段输出与派生产物隔离**：已提交阶段输出和已发布派生产物不得修改；阶段失败或取消不得提交部分输出；同一 ArtifactKind 只能有一个注册生产语义，算子只能通过 Provider 按构建期绑定的键请求产物，任务级缓存不得跨检查共享。
 7. **SI-A8-07 展示元数据无重复真值**：InspectionCompleted 和 InspectionFailed 的 InspectionMetadata 只能由其 InspectionPresentation 携带；InspectionTimedOut 的 InspectionMetadata 只能由事件自身携带；InspectionResult 和 InspectionError 不得保存重复副本。
 
 ## 9. A9 进展、终止与故障边界
