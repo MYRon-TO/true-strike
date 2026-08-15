@@ -156,16 +156,17 @@ Scheme Manager 的配置读取、校验、方案构建和保存是对 App Contro
 
 ## 8. 配置、方案与算子规约
 
-详细规约见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)。
+配置、方案与算子的详细规约见 [Contract/SchemeAndOperators.md](./Contract/SchemeAndOperators.md)，DecisionRule.Expression 的封闭抽象语法和静态类型系统见[判定表达式语法与类型规约](./Contract/DecisionExpression.md)。
 
-该子文档定义：
+这些子文档定义：
 
 - 配置阶段、启用阶段、禁用阶段和空执行方案等术语；
 - EditMode 草稿的可修改字段、`draft_version`、封闭 DraftMutation 模型及字段级校验错误码；
 - StageId、阶段顺序、阶段引用和禁用阶段的校验规则；
 - 算子注册表、配置校验及方案构建的错误边界；
 - Scheme Manager 完整构建不可变 Inspection Plan 的边界；
-- DecisionRule 的 Expression、AlwaysPass 和 AlwaysFail 三种形式；
+- DecisionRule 的 Expression、AlwaysPass 和 AlwaysFail 三种形式，以及 Expression 的输入、引用、校验和求值边界；
+- Expression AST 的字面量、值类型、逻辑与比较操作符、静态类型规则和结构限制；
 - 基于 Bind 短路语义的不可变累计阶段输出；
 - 单次检查内通用派生产物的不可变共享缓存；
 - 算子的显式输入、副作用、错误、取消和输出公共契约；

@@ -1,6 +1,6 @@
 # 配置、方案与算子规约
 
-本文定义视觉检测配置的有效性、不可变 Inspection Plan 的构建边界，以及不依赖具体算子类型的通用执行契约。整体规约索引见 [行为规约](../Contract.md)，方案和任务资源的完整生命周期见 [资源生命周期规约](./Resources.md)，Inspection Core 的取消检查点和终止语义见 [执行、并发与取消规约](./ExecutionAndCancellation.md)。
+本文定义视觉检测配置的有效性、不可变 Inspection Plan 的构建边界，以及不依赖具体算子类型的通用执行契约。DecisionRule.Expression 的封闭抽象语法和静态类型系统见[判定表达式语法与类型规约](./DecisionExpression.md)。整体规约索引见[行为规约](../Contract.md)，方案和任务资源的完整生命周期见[资源生命周期规约](./Resources.md)，Inspection Core 的取消检查点和终止语义见[执行、并发与取消规约](./ExecutionAndCancellation.md)。
 
 本文只规定所有算子必须遵守的公共契约，不定义 v1 注册哪些具体算子及其业务参数。
 
@@ -102,7 +102,9 @@ DraftMutation
 | `SetStageEnabled` | 目标阶段存在 | 启用状态变化造成的跨阶段引用有效性 |
 | `ReplaceStageDefinition` | 目标存在；新 OperatorId 已注册；参数符合新算子的参数模式 | 后续阶段和判定规则的输出引用兼容性 |
 | `ReplaceStageParameters` | 目标存在；参数符合当前算子的参数模式 | 参数中跨阶段引用的存在性、顺序和类型 |
-| `SetDecisionRule` | 规则变体、表达式结构及不依赖阶段环境的内部类型关系合法 | 被引用阶段的存在性、启用状态和输出类型 |
+| `SetDecisionRule` | 规则变体、表达式结构、字面量和不依赖阶段类型环境即可判定的类型关系合法 | 被引用阶段的存在性、启用状态、判定字段存在性及完整表达式类型 |
+
+字段级类型校验必须拒绝不需要解析 StageOutputRef 即可确定的类型错误，例如以 `Int64` 字面量作为 `Not` 的操作数。只要类型判断依赖 StageOutputRef 的实际字段类型，就延迟到完整配置校验；字段级校验不得猜测引用类型。
 
 因此，字段修改成功后草稿可以暂时包含悬空引用、对禁用阶段的引用、前向引用或输出类型不匹配。`ValidateDraft`、`SaveDraft` 和 `StartTestInspection` 必须通过完整配置校验发现这些问题。禁用阶段在字段级修改中仍执行与启用阶段相同的 StageId、OperatorId 和参数自身校验。
 
@@ -121,9 +123,14 @@ operator.unknown
 parameters.invalid
 decision_rule.invalid_structure
 decision_rule.invalid_expression
+decision_rule.expression_too_deep
+decision_rule.expression_too_large
+decision_rule.invalid_literal
+decision_rule.invalid_arity
+decision_rule.invalid_operand_type
 ```
 
-具体算子的参数错误码必须位于 `operator.<operator_id>.parameter.<code>` 命名空间。完整配置校验的跨字段错误码至少包括 `reference.stage_not_found`、`reference.stage_disabled`、`reference.forward_reference`、`reference.output_type_mismatch` 和 `decision_rule.reference_invalid`。错误码是稳定分类，诊断文本只用于展示和诊断。
+具体算子的参数错误码必须位于 `operator.<operator_id>.parameter.<code>` 命名空间。完整配置校验的跨字段错误码至少包括 `reference.stage_not_found`、`reference.stage_disabled`、`reference.forward_reference`、`reference.output_type_mismatch`、`decision_rule.reference_stage_not_found`、`decision_rule.reference_stage_disabled`、`decision_rule.reference_field_not_found`、`decision_rule.reference_type_mismatch` 和 `decision_rule.root_type_mismatch`。错误码是稳定分类，诊断文本只用于展示和诊断。Expression 错误的 `location` 必须定位到对应 AST 节点；GUI 不得依赖节点位置的展示文本推断错误类别。
 
 ## 2. 配置有效性
 
@@ -145,7 +152,8 @@ Scheme Manager 只对已经完整形成的内存 `InspectionSchemeConfig` 执行
 - 可执行代码、脚本、任意函数地址或闭包；
 - 未注册算子；
 - 依赖运行期全局状态才能解释的参数；
-- 对不存在阶段、禁用阶段或执行顺序中后续阶段输出的引用；
+- 启用阶段对不存在阶段、禁用阶段或执行顺序中后续阶段输出的引用；
+- DecisionRule 对不存在阶段、禁用阶段或未声明判定字段的引用；
 - 类型与被引用输出声明不匹配的引用。
 
 ### 2.2 禁用阶段
@@ -165,13 +173,21 @@ Scheme Manager 只对已经完整形成的内存 `InspectionSchemeConfig` 执行
 
 `decision_rule` 是必填字段，不存在空值或隐式默认规则：
 
-- `Expression(expression)` 是类型化声明式表达式；
+- `Expression(expression)` 是符合[判定表达式语法与类型规约](./DecisionExpression.md)的类型化声明式表达式；
 - `AlwaysPass` 是始终产生 `Pass` 的规则；
 - `AlwaysFail` 是始终产生 `Fail` 的规则。
 
-Expression 可以读取其声明允许的检查输入和已完成阶段输出。其每个阶段输出引用必须指向一个启用阶段，并与该阶段声明的输出类型一致；所有启用阶段均在最终判定前按顺序完成。
+v1 Expression 只能读取字面量和启用阶段输出契约显式声明的判定字段，不得直接读取 Frame、图像像素、InspectionMetadata、当前时间、随机数、AppState、GUI 状态、配置文件、派生产物缓存，或者测量、缺陷和可视化对象的未声明内部字段。算子需要让某项结果参与判定时，必须在输出契约中将其声明为稳定类型的判定字段。
 
-配置校验不得执行算子或读取实际 Frame。依赖实际图像内容的业务结果属于检查执行，不属于配置有效性。
+完整配置校验必须根据全部启用阶段的判定字段声明建立引用类型环境，并按表达式语法规约检查每个引用、操作数和根节点。每个 StageOutputRef 必须满足：
+
+1. StageId 存在且对应阶段已启用；
+2. 对应算子的输出契约声明了该 DecisionFieldId；
+3. 引用取得的 ExpressionType 满足所在表达式节点的类型要求。
+
+DecisionRule 在所有启用阶段完成后求值，因此可以引用配置中任意位置的启用阶段，不适用阶段间引用的前向引用限制。所有引用都必须静态校验，包括因 `And` 或 `Or` 短路而可能未在某次执行中读取的引用。
+
+配置校验不得执行算子、读取实际 StageOutput 或读取实际 Frame。依赖实际图像内容的业务结果属于检查执行，不属于配置有效性。
 
 ## 3. 算子注册表
 
@@ -187,12 +203,26 @@ OperatorDescriptor
 └── cancellation_contract
 ```
 
+输出契约必须显式描述可供 DecisionRule 读取的判定字段：
+
+```text
+OutputContract
+├── stage_output_type
+└── decision_fields: DecisionFieldDescriptor[]
+
+DecisionFieldDescriptor
+├── field_id: DecisionFieldId
+└── value_type: ExpressionType
+```
+
+DecisionFieldId 必须匹配 `[a-z][a-z0-9_]{0,63}`，在同一个 OutputContract 中唯一且稳定，只标识该输出契约公开的顶层判定字段，不是任意对象路径、Rust 字段名或 GUI 展示名称。`value_type` 只能是表达式语法规约定义的 v1 类型。没有判定字段时，`decision_fields` 使用空数组。StageOutput 必须为每个已声明字段提供一个符合对应 ExpressionType 及值约束的 ExpressionValue。
+
 公共约束：
 
 - OperatorId 在注册表中唯一；
 - 查询注册表是确定性的，不产生外部业务副作用；
 - 参数解析不得进行未声明的隐式类型转换；
-- 输入和输出契约必须足以在构建期检查阶段引用；
+- 输入和输出契约必须足以在构建期检查阶段引用和 DecisionRule 的判定字段引用；
 - 构建成功的 Executable Stage 不得依赖注册表后续变化；
 - 重复 OperatorId、无效描述符或注册表初始化失败属于组件初始化失败，直接 `panic`，不作为 `ConfigInvalid`；
 - 未在注册表中找到配置引用的 OperatorId 属于 `ConfigInvalid`。
@@ -371,14 +401,21 @@ ArtifactKey
 
 DecisionRule 在所有可执行阶段成功后求值：
 
-- `Expression` 只读取其静态声明允许的输入和累计阶段输出；
+- `Expression` 只读取字面量和已静态解析的累计阶段输出判定字段；
 - `AlwaysPass` 产生 `Pass`；
 - `AlwaysFail` 产生 `Fail`；
+- Expression 根节点求值为 `true` 时产生 `Pass`，为 `false` 时产生 `Fail`；
 - 判定求值不得修改累计输出或派生产物缓存；
 - 判定求值失败产生 `InspectionError`，不得伪装为业务 `Fail`；
-- 判定前和构造 Completed 输出前必须执行第七章规定的取消检查。
+- 判定前和构造 Completed 输出前必须执行[执行、并发与取消规约](./ExecutionAndCancellation.md)规定的取消检查。
 
-Expression 是配置中的类型化声明式数据，不是脚本、闭包或任意可执行代码。Scheme Manager 可以将其构建为内部可执行表示，但该表示必须保持原规则的可检查结构和确定语义。
+Expression 按 AST 递归求值。`Compare` 先求值左操作数，再求值右操作数；`And` 和 `Or` 按操作数配置顺序从左到右求值，`And` 遇到 `false` 后短路，`Or` 遇到 `true` 后短路。求值顺序不得由实现、编辑器或优化过程改变。
+
+`Bool` 和 `Int64` 使用对应值的精确比较；`Float64` 只比较有限值，并使用 IEEE 754 的数值比较关系，其中正零和负零相等；`String` 按 Unicode 标量值序列精确、区分大小写地比较，不执行裁剪、大小写折叠或 Unicode 规范化。
+
+Expression 求值必须是确定性的且无外部业务副作用。相同表达式和相同累计阶段输出必须产生相同结果。Scheme Manager 可以将 Expression 构建为内部可执行表示，但该表示必须保持原 AST 的可检查结构、类型、引用、求值顺序和结果语义。
+
+通过完整校验并成功构建后，所有 StageOutputRef 均已绑定到具体启用阶段和判定字段。运行期缺少已绑定阶段输出或判定字段，或者实际字段类型不符合 OutputContract，表示阶段输出或 Plan 内部不变量被破坏，直接 `panic`，不得转换为 `Fail` 或 `ConfigInvalid`。v1 表达式节点本身均为全函数；`DecisionEvaluationFailed` 保留用于判定执行无法正常完成的其他已声明错误，不得用于掩盖内部不变量破坏。
 
 ## 9. 阶段输出与可视化公共契约
 
@@ -388,6 +425,8 @@ Expression 是配置中的类型化声明式数据，不是脚本、闭包或任
 - StageOutput 在提交到累计上下文后不可变；
 - 输出中的测量、缺陷和可视化数据必须能够关联到来源 StageId；
 - 后续阶段只能按声明的类型读取更早阶段输出；
+- StageOutput 必须为 OutputContract 中每个判定字段提供一个类型完全一致的不可变值；
+- DecisionRule 不得读取 OutputContract 未声明为判定字段的 StageOutput 内容；
 - 未检测到目标等正常业务事实应表达为算子声明的正常输出，不应仅因判定可能为 Fail 就产生 InspectionError；
 - 算法库错误、输入格式不支持或算子无法履行输出契约属于执行错误。
 
@@ -417,7 +456,7 @@ Inspection Plan 的详细资源规则以 [资源生命周期规约](./Resources.
 2. StageId 在同一配置中唯一，且独立于阶段顺序和 OperatorId。
 3. 禁用阶段完整校验但不构建、不执行、不产生输出且不得被引用。
 4. 启用阶段只能引用执行顺序中更早的启用阶段，v1 不自动重排。
-5. DecisionRule 始终存在，并且只能是 Expression、AlwaysPass 或 AlwaysFail。
+5. DecisionRule 始终存在，并且只能是 Expression、AlwaysPass 或 AlwaysFail；Expression 必须符合独立语法规约并且根节点类型为 Bool。
 6. 空执行方案仍执行其已声明的 DecisionRule，不存在隐式默认判定。
 7. Inspection Plan 只有完整构建成功后才能发布，发布后始终不可变。
 8. Inspection Actor、Inspection Worker 和 Inspection Core 不构建或修改 Plan。
@@ -428,3 +467,4 @@ Inspection Plan 的详细资源规则以 [资源生命周期规约](./Resources.
 13. Pass 和 Fail 都是正常判定结果，不得与执行失败或取消混淆。
 14. 具体算子必须满足其声明的输入、输出、错误和取消契约。
 15. 完整校验成功的配置必须构建为完整 Inspection Plan，否则直接 `panic`。
+16. DecisionRule 只能读取启用阶段显式声明的判定字段；运行期判定字段缺失或类型不符属于内部不变量破坏。
