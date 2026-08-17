@@ -59,5 +59,5 @@
   - [规范 Frame](./core/Contract/FrameFormat.md)：v1 图像类型、内存布局、构造和采集边界转换；
   - [系统级不变量](./core/Contract/SystemInvariants.md)：按正确性性质分类的跨组件核心不变量；
   - [系统级不变量整理与维护指南](./core/Contract/SystemInvariantsGuide.md)：双轴检查框架、覆盖矩阵和维护方法。
-- 现有算子：文档统一位于 `./operators/` 目录；
+- 现有算子：文档统一位于 `./core/operators/` 目录；
   - [ROI 颜色均值匹配算子](./core/Operators/ColorMeanMatch.md)：`color_mean_match` 的完整具体算子规约；
